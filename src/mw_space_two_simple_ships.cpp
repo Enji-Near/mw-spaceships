@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <avr/wdt.h>
 
 /*****  Space Ships — v0.2  *****
