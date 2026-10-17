@@ -7,17 +7,17 @@
 - Firmware safety layers: move timeout, wrong-way check, both-limits check, 3-fault lockout, ~2 s watchdog.
 
 ## Hardware
-- Board: Arduino Nano Every (ATmega4809), 5V logic, powered from 12V on VIN. The VIN regulator accepts up to 21V (ABX00028 datasheet, p.2).
-- D2 → Ship 1 relay, to POS1
-- D3 → Ship 1 relay, to POS2
-- D4 → Ship 2 relay, to POS1
-- D5 → Ship 2 relay, to POS2
+- Board: Arduino Nano Every (ATmega4809), 5V logic, powered from 12V on VIN. The VIN regulator accepts up to 21V (ABX00028 datasheet, p.2). A0–A7 work as digital GPIO (ABX00028, §6.2) and map to D14–D21 (core `pins_arduino.h`, nona4809).
+- D14 (A0) → Ship 1 relay, to POS1
+- D16 (A2) → Ship 1 relay, to POS2
+- D18 (A4) → Ship 2 relay, to POS1. Also I2C SDA: don't start Wire while it drives a relay.
+- D20 (A6) → Ship 2 relay, to POS2
 - D6 ← Ship 1 limit, POS1
 - D7 ← Ship 1 limit, POS2
 - D8 ← Ship 2 limit, POS1
 - D9 ← Ship 2 limit, POS2
 - D13 → onboard status LED: slow blink = OK, fast blink = fault
-- D0/D1 reserved (hardware USART). Spare: D10–D12, A0–A7.
+- D0/D1 reserved (hardware USART). Spare: D2–D5, D10–D12, D15 (A1), D17 (A3), D19 (A5), D21 (A7).
 - Relays: 12V optocoupler modules, the same type as the Castle Scenes project. Trigger polarity to be verified on the bench, then set `RELAY_ON`.
 - Limit switches: assumed NO to GND with pull-up (`LIMIT_ACTIVE LOW`). Unverified until the bench test.
 - Limit input filter: 4.7 kΩ pull-up, 1 kΩ series, 100 nF to GND at the pin.

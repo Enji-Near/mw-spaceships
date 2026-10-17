@@ -18,11 +18,12 @@
 #define LIMIT_ACTIVE  LOW
 
 /****** Pin Configuration ******/
-// Relays (OUTPUT)
-const uint8_t SHIP1_RELAY_TO_POS1 = 2;
-const uint8_t SHIP1_RELAY_TO_POS2 = 3;
-const uint8_t SHIP2_RELAY_TO_POS1 = 4;
-const uint8_t SHIP2_RELAY_TO_POS2 = 5;
+// Relays (OUTPUT) — analog header pins used as digital, every second pin for board layout.
+// A4 (D18) is also I2C SDA: don't start Wire while it drives a relay.
+const uint8_t SHIP1_RELAY_TO_POS1 = A0;  // D14
+const uint8_t SHIP1_RELAY_TO_POS2 = A2;  // D16
+const uint8_t SHIP2_RELAY_TO_POS1 = A4;  // D18
+const uint8_t SHIP2_RELAY_TO_POS2 = A6;  // D20
 
 // Limit switches (INPUT_PULLUP)
 const uint8_t SHIP1_LIMIT_POS1 = 6;
