@@ -23,8 +23,8 @@
 #define LIMIT_DEBOUNCE      20UL     // Same as the live firmware (ms)
 #define BENCH_MOVE_TIMEOUT  60000UL  // Abort a leg after this (ms). Generous, because travel time is unknown.
 #define LIMIT_CLEAR_TIME    1500UL   // Ship must leave the limit behind it within this time (ms)
-#define REVERSE_PAUSE       2000UL   // Motor off between legs (ms), so it stops before reversing
-#define ROUND_TRIPS         5
+#define REVERSE_PAUSE       500UL   // Motor off between legs (ms), so it stops before reversing
+#define ROUND_TRIPS         2
 
 // Jog (hold 5-8). A serial terminal sends no key-release event: a held key sends one
 // character, pauses (desktop "repeat delay"), then repeats. The motor runs only while
