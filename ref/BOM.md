@@ -15,7 +15,7 @@ All through-hole, on perfboard. The Nano sits in female headers so it lifts out 
 | C1 | 1 | Electrolytic capacitor | 1000 µF, 25 V min (470 µF OK) | 12V bulk: covers motor start-up dips |
 | C2 | 1 | Electrolytic capacitor | 10 µF, 25 V min | Local reservoir at Nano VIN |
 | C3 | 1 | Ceramic capacitor | 100 nF, 50 V, X7R | High-frequency decoupling at Nano VIN, close to the pin |
-| R1–R4 | 4 | Resistor | 4.7 kΩ, ¼ W | Limit input pull-ups to +5V; stiffer than the internal pull-up |
+| R1–R4 | 4 | Resistor | 10 kΩ, ¼ W (2.2–10 kΩ OK) | Limit input pull-ups to +5V; stiffer than the internal pull-up |
 | R5–R8 | 4 | Resistor | 1 kΩ, ¼ W | Limit input series resistor; forms RC filter with C4–C7, limits surge current |
 | C4–C7 | 4 | Ceramic capacitor | 100 nF, 50 V | Limit input filter, at the Arduino pin |
 | R9–R12 | 4 | Resistor | 10 kΩ, ¼ W | Pull-down on each relay IN line; holds relays off while the Nano resets or uploads |

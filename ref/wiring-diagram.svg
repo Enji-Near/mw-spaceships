@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 1010" width="1240" height="1010" font-family="Helvetica, Arial, sans-serif" font-size="13">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 1020" width="1240" height="1020" font-family="Helvetica, Arial, sans-serif" font-size="13">
 <defs><g id="gnd"><line x1="0" y1="0" x2="0" y2="8" stroke="#222" stroke-width="2"/><line x1="-9" y1="8" x2="9" y2="8" stroke="#222" stroke-width="2"/><line x1="-5" y1="12" x2="5" y2="12" stroke="#222" stroke-width="2"/><line x1="-2" y1="16" x2="2" y2="16" stroke="#222" stroke-width="2"/></g></defs>
-<rect width="1240" height="1010" fill="#fff"/>
+<rect width="1240" height="1020" fill="#fff"/>
 <text x="30" y="40" text-anchor="start" fill="#111" font-size="22" font-weight="bold">Space Ships — Wiring Diagram</text>
-<text x="30" y="62" text-anchor="start" fill="#444" font-size="12">v0.2 · DRAFT · both ships shown · net labels (+12V, +5V, GND) join wherever they appear · values pending bench test are marked TBD</text>
+<text x="30" y="62" text-anchor="start" fill="#444" font-size="12">v0.3 · DRAFT · both ships shown · net labels (+12V, +5V, GND) join wherever they appear · values pending bench test are marked TBD</text>
 <rect x="40" y="105" width="110" height="80" fill="#f7f7f7" stroke="#333" stroke-width="1.5"/>
 <text x="95" y="140" text-anchor="middle" font-weight="bold">12V DC PSU</text>
 <text x="95" y="158" text-anchor="middle" fill="#444" font-size="11">model TBD</text>
@@ -205,7 +205,7 @@
 <rect x="933" y="292.0" width="14" height="30" fill="#fff" stroke="#d35400" stroke-width="2"/>
 <line x1="940" y1="284" x2="940" y2="278" stroke="#d35400" stroke-width="2"/>
 <text x="934" y="276" text-anchor="end" fill="#d35400" font-size="10" font-weight="bold">+5V</text>
-<text x="950" y="304" text-anchor="start" font-size="10">R1 4.7 kΩ</text>
+<text x="950" y="304" text-anchor="start" font-size="10">R1 10 kΩ</text>
 <line x1="940" y1="330" x2="1080" y2="330" stroke="#1f5fa8" stroke-width="2" stroke-dasharray="7 4"/>
 <circle cx="1084" cy="330" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
 <circle cx="1126" cy="330" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
@@ -235,7 +235,7 @@
 <rect x="933" y="372.0" width="14" height="30" fill="#fff" stroke="#d35400" stroke-width="2"/>
 <line x1="940" y1="364" x2="940" y2="358" stroke="#d35400" stroke-width="2"/>
 <text x="934" y="356" text-anchor="end" fill="#d35400" font-size="10" font-weight="bold">+5V</text>
-<text x="950" y="384" text-anchor="start" font-size="10">R2 4.7 kΩ</text>
+<text x="950" y="384" text-anchor="start" font-size="10">R2 10 kΩ</text>
 <line x1="940" y1="410" x2="1080" y2="410" stroke="#1f5fa8" stroke-width="2" stroke-dasharray="7 4"/>
 <circle cx="1084" cy="410" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
 <circle cx="1126" cy="410" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
@@ -265,7 +265,7 @@
 <rect x="933" y="452.0" width="14" height="30" fill="#fff" stroke="#d35400" stroke-width="2"/>
 <line x1="940" y1="444" x2="940" y2="438" stroke="#d35400" stroke-width="2"/>
 <text x="934" y="436" text-anchor="end" fill="#d35400" font-size="10" font-weight="bold">+5V</text>
-<text x="950" y="464" text-anchor="start" font-size="10">R3 4.7 kΩ</text>
+<text x="950" y="464" text-anchor="start" font-size="10">R3 10 kΩ</text>
 <line x1="940" y1="490" x2="1080" y2="490" stroke="#1f5fa8" stroke-width="2" stroke-dasharray="7 4"/>
 <circle cx="1084" cy="490" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
 <circle cx="1126" cy="490" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
@@ -295,7 +295,7 @@
 <rect x="933" y="532.0" width="14" height="30" fill="#fff" stroke="#d35400" stroke-width="2"/>
 <line x1="940" y1="524" x2="940" y2="518" stroke="#d35400" stroke-width="2"/>
 <text x="934" y="516" text-anchor="end" fill="#d35400" font-size="10" font-weight="bold">+5V</text>
-<text x="950" y="544" text-anchor="start" font-size="10">R4 4.7 kΩ</text>
+<text x="950" y="544" text-anchor="start" font-size="10">R4 10 kΩ</text>
 <line x1="940" y1="570" x2="1080" y2="570" stroke="#1f5fa8" stroke-width="2" stroke-dasharray="7 4"/>
 <circle cx="1084" cy="570" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
 <circle cx="1126" cy="570" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
@@ -305,25 +305,26 @@
 <text x="1105" y="546" text-anchor="middle" font-size="11" font-weight="bold">SW4</text>
 <text x="1105" y="590" text-anchor="middle" fill="#444" font-size="10">Ship 2 · POS2</text>
 <text x="1010" y="322" text-anchor="middle" fill="#444" font-size="10">twisted pair to switch</text>
-<rect x="30" y="815" width="1180" height="150" fill="#fbfbfb" stroke="#888" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="30" y="815" width="1180" height="166" fill="#fbfbfb" stroke="#888" stroke-width="1.2" stroke-dasharray="6 4"/>
 <text x="46" y="840" text-anchor="start" fill="#222" font-size="13" font-weight="bold">Notes</text>
 <text x="46" y="858" text-anchor="start" fill="#222" font-size="12">1. Relays: 12V optocoupler modules. Trigger polarity is TBD (bench test). R9–R12 hold each relay OFF while the Nano resets:</text>
 <text x="46" y="876" text-anchor="start" fill="#222" font-size="12">    fit to GND if relays are active HIGH (shown), or to +5V if they turn out active LOW.</text>
 <text x="46" y="894" text-anchor="start" fill="#222" font-size="12">2. Limit switches shown normally open: at limit = closed = LOW. Unverified until the bench test. Pull-up and filter sit at the Nano end.</text>
 <text x="46" y="912" text-anchor="start" fill="#222" font-size="12">3. A4 (D18) is also the I2C SDA pin. No I2C is used; keep it that way while it drives Relay 2A.</text>
 <text x="46" y="930" text-anchor="start" fill="#222" font-size="12">4. Each motor: C8/C9 100 nF ceramic + D1/D2 P6KE18CA bidirectional TVS across its terminals, soldered at the motor.</text>
-<text x="46" y="948" text-anchor="start" fill="#222" font-size="12">5. Every GND symbol is one common ground. Grey analog pins are spare, left unconnected.</text>
-<line x1="30" y1="990" x2="58" y2="990" stroke="#c0392b" stroke-width="2.5"/>
-<text x="64" y="994" text-anchor="start" fill="#444" font-size="11">+12V</text>
-<line x1="118" y1="990" x2="146" y2="990" stroke="#222" stroke-width="2.5"/>
-<text x="152" y="994" text-anchor="start" fill="#444" font-size="11">GND</text>
-<line x1="199" y1="990" x2="227" y2="990" stroke="#d35400" stroke-width="2.5"/>
-<text x="233" y="994" text-anchor="start" fill="#444" font-size="11">+5V</text>
-<line x1="280" y1="990" x2="308" y2="990" stroke="#1f5fa8" stroke-width="2.5"/>
-<text x="314" y="994" text-anchor="start" fill="#444" font-size="11">signal</text>
-<line x1="382" y1="990" x2="410" y2="990" stroke="#555" stroke-width="2.5"/>
-<text x="416" y="994" text-anchor="start" fill="#444" font-size="11">motor (switched)</text>
-<line x1="554" y1="990" x2="582" y2="990" stroke="#1f5fa8" stroke-width="2.5" stroke-dasharray="7 4"/>
-<text x="588" y="994" text-anchor="start" fill="#444" font-size="11">field cable</text>
-<text x="1210" y="994" text-anchor="end" fill="#444" font-size="11">v0.2 · 2026-10-16</text>
+<text x="46" y="948" text-anchor="start" fill="#222" font-size="12">5. Relay contacts: NO → +12V, NC → GND. Relays off, or Nano reset / power lost = both motor leads at GND (stopped). Wrong direction: swap the motor leads.</text>
+<text x="46" y="966" text-anchor="start" fill="#222" font-size="12">6. Every GND symbol is one common ground. Grey analog pins are spare, left unconnected.</text>
+<line x1="30" y1="1000" x2="58" y2="1000" stroke="#c0392b" stroke-width="2.5"/>
+<text x="64" y="1004" text-anchor="start" fill="#444" font-size="11">+12V</text>
+<line x1="118" y1="1000" x2="146" y2="1000" stroke="#222" stroke-width="2.5"/>
+<text x="152" y="1004" text-anchor="start" fill="#444" font-size="11">GND</text>
+<line x1="199" y1="1000" x2="227" y2="1000" stroke="#d35400" stroke-width="2.5"/>
+<text x="233" y="1004" text-anchor="start" fill="#444" font-size="11">+5V</text>
+<line x1="280" y1="1000" x2="308" y2="1000" stroke="#1f5fa8" stroke-width="2.5"/>
+<text x="314" y="1004" text-anchor="start" fill="#444" font-size="11">signal</text>
+<line x1="382" y1="1000" x2="410" y2="1000" stroke="#555" stroke-width="2.5"/>
+<text x="416" y="1004" text-anchor="start" fill="#444" font-size="11">motor (switched)</text>
+<line x1="554" y1="1000" x2="582" y2="1000" stroke="#1f5fa8" stroke-width="2.5" stroke-dasharray="7 4"/>
+<text x="588" y="1004" text-anchor="start" fill="#444" font-size="11">field cable</text>
+<text x="1210" y="1004" text-anchor="end" fill="#444" font-size="11">v0.3 · 2026-10-17</text>
 </svg>

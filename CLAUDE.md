@@ -20,13 +20,13 @@
 - D0/D1 reserved (hardware USART). Spare: D2–D5, D10–D12, D15 (A1), D17 (A3), D19 (A5), D21 (A7).
 - Relays: 12V optocoupler modules, the same type as the Castle Scenes project. Trigger polarity to be verified on the bench, then set `RELAY_ON`.
 - Limit switches: assumed NO to GND with pull-up (`LIMIT_ACTIVE LOW`). Unverified until the bench test.
-- Limit input filter: 4.7 kΩ pull-up, 1 kΩ series, 100 nF to GND at the pin.
+- Limit input filter: 10 kΩ pull-up, 1 kΩ series, 100 nF to GND at the pin. OK ranges: pull-up 2.2–10 kΩ, series 470 Ω–2.2 kΩ (keep small vs the 20–50 kΩ internal pull-up), cap 47–470 nF (ATmega4809 DS40002016B, Table 4-16).
 - 12V supply: unknown. Motor running and stall current: unknown. No input fuse.
 - Buses: none. Serial: USB at 115200 baud.
 
 ## Toolchain and commands
 - VS Code + PlatformIO on Ubuntu Linux; repo on GitHub.
-- Envs: `mw_space_two_simple_ships` is the live display firmware; `bench_test` is a serial menu to click each relay, read the limit switches, and time ship travel for tuning.
+- Envs: `mw_space_two_simple_ships` is the live display firmware; `bench_test` is a serial menu to click each relay, read the limit switches, time ship travel for tuning, and jog ships by holding 5–8.
 
 ## Code standards
 - Config constants at the top of each file, so tuning never means hunting through logic.

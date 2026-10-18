@@ -6,6 +6,7 @@
 /*****  Space Ships — bench test  *****
  *  Serial menu for bench setup: 115200 baud, single-key commands (no Enter needed).
  *    1-4  Click one relay for CLICK_TIME (check RELAY_ON polarity)
+ *    5-8  Hold to jog a ship (same order as 1-4). Stops on release, at the limit, or on any fault.
  *    w    Watch raw limit levels, print on every change (check NO/NC → LIMIT_ACTIVE)
  *    a/b  Time ship 1/2: home to POS1, then ROUND_TRIPS round trips, print averages
  *    s    Stop all motors
@@ -25,6 +26,13 @@
 #define REVERSE_PAUSE       2000UL   // Motor off between legs (ms), so it stops before reversing
 #define ROUND_TRIPS         5
 
+// Jog (hold 5-8). A serial terminal sends no key-release event: a held key sends one
+// character, pauses (desktop "repeat delay"), then repeats. The motor runs only while
+// characters keep arriving (dead-man). Repeat delay/rate are desktop settings: unverified,
+// tune these if a held key stutters (raise FIRST) or stops late (lower REPEAT).
+#define JOG_FIRST_TIMEOUT   700UL    // Wait this long after the first press for repeats to start (ms)
+#define JOG_REPEAT_TIMEOUT  200UL    // Once repeating, stop this long after the last character (ms)
+
 /****** Types ******/
 struct LimitSwitch {
   uint8_t pin;
@@ -41,7 +49,7 @@ struct BenchShip {
   LimitSwitch limitPos2;
 };
 
-enum Mode { IDLE, CLICKING, WATCHING, HOMING, MOVING, PAUSING };
+enum Mode { IDLE, CLICKING, WATCHING, HOMING, MOVING, PAUSING, JOGGING };
 enum Dir  { TO_POS1, TO_POS2 };
 
 /****** Objects ******/
@@ -57,6 +65,19 @@ unsigned long modeStart = 0;
 uint8_t legIndex = 0;                    // Even = to POS2, odd = to POS1
 unsigned long legTimes[2][ROUND_TRIPS];  // [Dir][trip], ms
 uint8_t watchRaw[4];                     // Last printed raw levels in watch mode
+
+// Per-ship motor history, so a jog can't reverse a motor that has only just stopped.
+bool motorOn[2]           = { false, false };
+bool motorUsed[2]         = { false, false };
+Dir lastDir[2]            = { TO_POS1, TO_POS1 };
+unsigned long motorOffAt[2] = { 0, 0 };
+
+// Jog key tracking
+char jogKey = 0;                         // Key holding the current jog
+bool jogRepeating = false;               // True once auto-repeat has started
+unsigned long jogLastKey = 0;            // Last time jogKey arrived
+char latchedKey = 0;                     // Held key ignored until released, so repeats can't restart a stopped jog
+unsigned long latchedLastAt = 0;
 
 /****** Limit Switch Helpers ******/
 void limitBegin(LimitSwitch &sw) {
@@ -84,6 +105,11 @@ LimitSwitch &behindOf(BenchShip &s, Dir d) { return (d == TO_POS1) ? s.limitPos2
 void motorStop(BenchShip &s) {
   digitalWrite(s.relayToPos1, RELAY_OFF);
   digitalWrite(s.relayToPos2, RELAY_OFF);
+  uint8_t i = s.id - 1;
+  if (motorOn[i]) {
+    motorOn[i]    = false;
+    motorOffAt[i] = millis();
+  }
 }
 
 void motorToPos1(BenchShip &s) {
@@ -97,7 +123,18 @@ void motorToPos2(BenchShip &s) {
 }
 
 void motorDrive(BenchShip &s, Dir d) {
+  uint8_t i = s.id - 1;
+  motorOn[i]   = true;
+  motorUsed[i] = true;
+  lastDir[i]   = d;
   if (d == TO_POS1) motorToPos1(s); else motorToPos2(s);
+}
+
+// Reversing a motor that is still spinning down stresses the relay contacts and gearbox.
+bool reverseTooSoon(const BenchShip &s, Dir d) {
+  uint8_t i = s.id - 1;
+  if (!motorUsed[i] || lastDir[i] == d) return false;
+  return motorOn[i] || (millis() - motorOffAt[i] < REVERSE_PAUSE);
 }
 
 void stopAll() {
@@ -122,6 +159,7 @@ void printMenu() {
   Serial.print(F("2  click Ship 1 relay to POS2\n"));
   Serial.print(F("3  click Ship 2 relay to POS1\n"));
   Serial.print(F("4  click Ship 2 relay to POS2\n"));
+  Serial.print(F("5-8 hold to jog, same order as 1-4 (release to stop)\n"));
   Serial.print(F("w  watch raw limit levels\n"));
   Serial.print(F("a  time Ship 1 ("));
   Serial.print(ROUND_TRIPS);
@@ -349,6 +387,76 @@ void updateTiming() {
   }
 }
 
+/****** Jog (hold 5-8) ******/
+// Ignore a held key until it is released, so key repeats can't restart a jog that just stopped.
+void latchKey(char c) {
+  latchedKey    = c;
+  latchedLastAt = millis();
+}
+
+bool isLatched(char c) {
+  if (c != latchedKey) return false;
+  if (millis() - latchedLastAt >= JOG_REPEAT_TIMEOUT) {  // Gap since last repeat = key was released
+    latchedKey = 0;
+    return false;
+  }
+  latchedLastAt = millis();  // Still held: keep ignoring
+  return true;
+}
+
+void startJog(BenchShip &s, Dir d, char key) {
+  if (s.limitPos1.active && s.limitPos2.active) {
+    abortRun(F("both limits active — check wiring"));
+    latchKey(key);
+    return;
+  }
+  if (aheadOf(s, d).active) {
+    printShipDir(s, d);
+    Serial.print(F(": already at that limit, not driving into the end\n> "));
+    latchKey(key);
+    return;
+  }
+  if (reverseTooSoon(s, d)) {
+    printShipDir(s, d);
+    Serial.print(F(": motor just stopped, wait "));
+    Serial.print(REVERSE_PAUSE);
+    Serial.print(F(" ms before reversing\n> "));
+    latchKey(key);
+    return;
+  }
+  runShip      = &s;
+  runDir       = d;
+  modeStart    = millis();
+  jogKey       = key;
+  jogRepeating = false;
+  jogLastKey   = millis();
+  mode         = JOGGING;
+  printShipDir(s, d);
+  Serial.print(F(": jogging, release key to stop\n"));
+  motorDrive(s, d);
+}
+
+void endJog(const __FlashStringHelper *reason) {
+  Serial.print(reason);
+  Serial.print(F("\n"));
+  latchKey(jogKey);
+  finishRun();
+}
+
+void updateJog() {
+  // Same arrival and fault checks as a timed move: limit ahead, both limits, wrong way, timeout.
+  if (moveArrived()) {
+    endJog(F("Reached limit, stopped"));
+    return;
+  }
+  if (mode != JOGGING) {  // moveArrived() aborted on a fault
+    latchKey(jogKey);
+    return;
+  }
+  unsigned long wait = jogRepeating ? JOG_REPEAT_TIMEOUT : JOG_FIRST_TIMEOUT;
+  if (millis() - jogLastKey >= wait) endJog(F("Key released, stopped"));
+}
+
 /****** Serial Commands ******/
 void handleIdleKey(char c) {
   switch (c) {
@@ -356,6 +464,10 @@ void handleIdleKey(char c) {
     case '2': startClick(ships[0], TO_POS2); break;
     case '3': startClick(ships[1], TO_POS1); break;
     case '4': startClick(ships[1], TO_POS2); break;
+    case '5': startJog(ships[0], TO_POS1, c); break;
+    case '6': startJog(ships[0], TO_POS2, c); break;
+    case '7': startJog(ships[1], TO_POS1, c); break;
+    case '8': startJog(ships[1], TO_POS2, c); break;
     case 'w': startWatch(); break;
     case 'a': startTiming(ships[0]); break;
     case 'b': startTiming(ships[1]); break;
@@ -375,12 +487,19 @@ void handleSerial() {
   char c = Serial.read();
   if (c == '\r' || c == '\n') return;
 
-  if (mode == WATCHING) {
+  if (mode == JOGGING) {
+    if (c == jogKey) {           // Key still held: keep the dead-man alive
+      jogRepeating = true;
+      jogLastKey   = millis();
+    } else {                     // Any other key stops the jog
+      endJog(F("Jog stopped by key"));
+    }
+  } else if (mode == WATCHING) {
     Serial.print(F("Watch ended\n> "));
     mode = IDLE;
   } else if (mode != IDLE) {
     abortRun(F("stopped by key"));
-  } else {
+  } else if (!isLatched(c)) {    // Idle: drop repeats of a key that just stopped a jog
     handleIdleKey(c);
   }
 }
@@ -388,7 +507,7 @@ void handleSerial() {
 /****** Status LED ******/
 // ON while a motor is driven, so a running motor is visible without the monitor.
 void updateStatusLED() {
-  bool driving = (mode == CLICKING || mode == HOMING || mode == MOVING);
+  bool driving = (mode == CLICKING || mode == HOMING || mode == MOVING || mode == JOGGING);
   digitalWrite(STATUS_LED, driving ? HIGH : LOW);
 }
 
@@ -423,6 +542,7 @@ void loop() {
 
   switch (mode) {
     case CLICKING: updateClick(); break;
+    case JOGGING:  updateJog(); break;
     case WATCHING: updateWatch(); break;
     case HOMING:
     case MOVING:
