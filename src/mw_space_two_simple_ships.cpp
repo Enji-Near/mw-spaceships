@@ -24,10 +24,8 @@
  *    and a floating pin during reset/upload leaves the relay OFF. Verify on the bench.
  *
  *  Limit switches — wired pin → switch → GND, INPUT_PULLUP.
- *    Currently assumed NO (normally open): at limit = switch closed = LOW.
- *    If the switches have an NC terminal, prefer NC and set LIMIT_ACTIVE to HIGH:
- *    a broken wire then reads as "at limit" and stops the motor (fail-safe).
- *    With NO, a broken wire reads as "not at limit"; the move timeout is the backstop.
+ *    Bench-verified 2026-10-19 (12V test): all NC (active HIGH).
+ *    NC: a broken wire reads as "at limit" and stops the motor (fail-safe).
  *
  *  Safety layers:
  *    1. Move timeout — stop if the target limit is never reached (slipped rope, jam, dead switch)
@@ -43,13 +41,13 @@
 
 #define DEBUG 1  // 1 = serial debug output (115200 baud), 0 = deployment
 
-// Pins, RELAY_ON/OFF, LIMIT_ACTIVE, WDT_TIMEOUT: include/ship_hardware.h (shared with bench_test)
+// Pins, RELAY_ON/OFF, SHIPx_POSx_ACTIVE, WDT_TIMEOUT: include/ship_hardware.h (shared with bench_test)
 
 /****** Timing Constants ******/
 #define LIMIT_DEBOUNCE     20UL     // Limit must read steady this long (ms).
                                     // Longer = more noise immunity, but more overtravel past the switch.
 #define DWELL_TIME         5000UL   // Pause at each end (ms)
-#define MOVE_TIMEOUT       20000UL  // Max end-to-end travel (ms) — high estimate; set to ~1.5x measured travel time
+#define MOVE_TIMEOUT       64000UL  // Max end-to-end travel (ms): 1.5x slowest bench avg (Ship 2 to POS1, 42387 ms)
 #define LIMIT_CLEAR_TIME   1500UL   // Ship must leave the limit behind it within this time (ms)
 #define FAULT_RETRY_TIME   10000UL  // Cool-down before retrying after a fault (ms).
                                     // Lets a stalled motor cool and a snag clear. MAX_FAULTS bounds total stall time.
@@ -70,6 +68,7 @@ enum ShipState {
 // One debounced limit switch
 struct LimitSwitch {
   uint8_t pin;
+  uint8_t activeLevel;      // Pin level at the limit (NO = LOW, NC = HIGH)
   bool active;              // Debounced: true = ship is at this limit
   bool lastRaw;             // Last raw reading
   unsigned long lastChange; // When the raw reading last changed
@@ -89,13 +88,13 @@ struct Ship {
 };
 
 /****** Objects ******/
-Ship ship1 = { 1, SHIP1_RELAY_TO_POS1, SHIP1_RELAY_TO_POS2, { SHIP1_LIMIT_POS1 }, { SHIP1_LIMIT_POS2 } };
-Ship ship2 = { 2, SHIP2_RELAY_TO_POS1, SHIP2_RELAY_TO_POS2, { SHIP2_LIMIT_POS1 }, { SHIP2_LIMIT_POS2 } };
+Ship ship1 = { 1, SHIP1_RELAY_TO_POS1, SHIP1_RELAY_TO_POS2, { SHIP1_LIMIT_POS1, SHIP1_POS1_ACTIVE }, { SHIP1_LIMIT_POS2, SHIP1_POS2_ACTIVE } };
+Ship ship2 = { 2, SHIP2_RELAY_TO_POS1, SHIP2_RELAY_TO_POS2, { SHIP2_LIMIT_POS1, SHIP2_POS1_ACTIVE }, { SHIP2_LIMIT_POS2, SHIP2_POS2_ACTIVE } };
 
 /****** Limit Switch Helpers ******/
 void limitBegin(LimitSwitch &sw) {
   pinMode(sw.pin, INPUT_PULLUP);
-  sw.lastRaw    = (digitalRead(sw.pin) == LIMIT_ACTIVE);
+  sw.lastRaw    = (digitalRead(sw.pin) == sw.activeLevel);
   sw.active     = sw.lastRaw;   // Trust first reading at boot
   sw.lastChange = millis();
 }
@@ -103,7 +102,7 @@ void limitBegin(LimitSwitch &sw) {
 // Accept a new level only after it has been steady for LIMIT_DEBOUNCE ms.
 // Rejects contact bounce and short noise spikes picked up by long wires.
 void limitUpdate(LimitSwitch &sw) {
-  bool raw = (digitalRead(sw.pin) == LIMIT_ACTIVE);
+  bool raw = (digitalRead(sw.pin) == sw.activeLevel);
   if (raw != sw.lastRaw) {
     sw.lastRaw    = raw;
     sw.lastChange = millis();

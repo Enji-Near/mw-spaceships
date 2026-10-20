@@ -66,7 +66,7 @@ The board can be built now. The items below land off-board and can be added once
 | F1 fuse rating | Motor running current | Closed: no input fuse fitted (decided 2026-10-16) |
 | Motor wire gauge | Motor running current | Closed: 22 AWG throughout, about 1 V drop on a 15' run at 2 A; slower ships acceptable |
 | Relay part (modules vs RZ-12-C) | Client relay inventory (R1–R3); motor stall current | Stall current ≈ 12 V ÷ winding resistance; must sit within contact rating |
-| Limit switch wiring (NO vs NC) | Bench test of the switches | NC needs LIMIT_ACTIVE = HIGH in the sketch |
+| Limit switch wiring (NO vs NC) | Bench test of the switches | Done 2026-10-19: all NC; set per switch in `SHIPx_POSx_ACTIVE` |
 | LED1 / R13 | Client question O5 | Fit only if staff want a visible status light |
 | Enclosure | Client question I1 | Location and access |
 

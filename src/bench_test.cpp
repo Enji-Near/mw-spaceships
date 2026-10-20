@@ -7,7 +7,7 @@
  *  Serial menu for bench setup: 115200 baud, single-key commands (no Enter needed).
  *    1-4  Click one relay for CLICK_TIME (check RELAY_ON polarity)
  *    5-8  Hold to jog a ship (same order as 1-4). Stops on release, at the limit, or on any fault.
- *    w    Watch raw limit levels, print on every change (check NO/NC → LIMIT_ACTIVE)
+ *    w    Watch raw limit levels, print on every change (check NO/NC → SHIPx_POSx_ACTIVE)
  *    a/b  Time ship 1/2: home to POS1, then ROUND_TRIPS round trips, print averages
  *    s    Stop all motors
  *    h    Menu
@@ -36,6 +36,7 @@
 /****** Types ******/
 struct LimitSwitch {
   uint8_t pin;
+  uint8_t activeLevel;      // Pin level at the limit (NO = LOW, NC = HIGH)
   bool active;              // Debounced: true = ship is at this limit
   bool lastRaw;             // Last raw reading, as "active"
   unsigned long lastChange; // When the raw reading last changed
@@ -54,8 +55,8 @@ enum Dir  { TO_POS1, TO_POS2 };
 
 /****** Objects ******/
 BenchShip ships[2] = {
-  { 1, SHIP1_RELAY_TO_POS1, SHIP1_RELAY_TO_POS2, { SHIP1_LIMIT_POS1 }, { SHIP1_LIMIT_POS2 } },
-  { 2, SHIP2_RELAY_TO_POS1, SHIP2_RELAY_TO_POS2, { SHIP2_LIMIT_POS1 }, { SHIP2_LIMIT_POS2 } }
+  { 1, SHIP1_RELAY_TO_POS1, SHIP1_RELAY_TO_POS2, { SHIP1_LIMIT_POS1, SHIP1_POS1_ACTIVE }, { SHIP1_LIMIT_POS2, SHIP1_POS2_ACTIVE } },
+  { 2, SHIP2_RELAY_TO_POS1, SHIP2_RELAY_TO_POS2, { SHIP2_LIMIT_POS1, SHIP2_POS1_ACTIVE }, { SHIP2_LIMIT_POS2, SHIP2_POS2_ACTIVE } }
 };
 
 Mode mode = IDLE;
@@ -82,14 +83,14 @@ unsigned long latchedLastAt = 0;
 /****** Limit Switch Helpers ******/
 void limitBegin(LimitSwitch &sw) {
   pinMode(sw.pin, INPUT_PULLUP);
-  sw.lastRaw    = (digitalRead(sw.pin) == LIMIT_ACTIVE);
+  sw.lastRaw    = (digitalRead(sw.pin) == sw.activeLevel);
   sw.active     = sw.lastRaw;
   sw.lastChange = millis();
 }
 
 // Same debounce as the live firmware, so timings match what it will see.
 void limitUpdate(LimitSwitch &sw) {
-  bool raw = (digitalRead(sw.pin) == LIMIT_ACTIVE);
+  bool raw = (digitalRead(sw.pin) == sw.activeLevel);
   if (raw != sw.lastRaw) {
     sw.lastRaw    = raw;
     sw.lastChange = millis();
@@ -143,6 +144,15 @@ void stopAll() {
 }
 
 /****** Output Helpers ******/
+const uint8_t WATCH_PINS[4]   = { SHIP1_LIMIT_POS1, SHIP1_LIMIT_POS2, SHIP2_LIMIT_POS1, SHIP2_LIMIT_POS2 };
+const uint8_t WATCH_ACTIVE[4] = { SHIP1_POS1_ACTIVE, SHIP1_POS2_ACTIVE, SHIP2_POS1_ACTIVE, SHIP2_POS2_ACTIVE };
+
+void printWatchName(uint8_t i) {
+  Serial.print(F("S"));
+  Serial.print(i / 2 + 1);
+  Serial.print((i % 2) ? F("P2") : F("P1"));
+}
+
 void printShipDir(const BenchShip &s, Dir d) {
   Serial.print(F("Ship "));
   Serial.print(s.id);
@@ -153,8 +163,11 @@ void printMenu() {
   Serial.print(F("\n--- Space Ships bench test ---\n"));
   Serial.print(F("RELAY_ON = "));
   Serial.print(RELAY_ON == HIGH ? F("HIGH") : F("LOW"));
-  Serial.print(F(", LIMIT_ACTIVE = "));
-  Serial.print(LIMIT_ACTIVE == HIGH ? F("HIGH") : F("LOW"));
+  Serial.print(F(", limit active levels: "));
+  for (uint8_t i = 0; i < 4; i++) {
+    printWatchName(i);
+    Serial.print(WATCH_ACTIVE[i] == HIGH ? F("=HIGH ") : F("=LOW "));
+  }
   Serial.print(F("\n1  click Ship 1 relay to POS1\n"));
   Serial.print(F("2  click Ship 1 relay to POS2\n"));
   Serial.print(F("3  click Ship 2 relay to POS1\n"));
@@ -219,15 +232,11 @@ void updateClick() {
 }
 
 /****** Limit Watch ******/
-const uint8_t WATCH_PINS[4] = { SHIP1_LIMIT_POS1, SHIP1_LIMIT_POS2, SHIP2_LIMIT_POS1, SHIP2_LIMIT_POS2 };
-
 void printWatchLine() {
   for (uint8_t i = 0; i < 4; i++) {
-    Serial.print(F("S"));
-    Serial.print(i / 2 + 1);
-    Serial.print((i % 2) ? F("P2") : F("P1"));
+    printWatchName(i);
     Serial.print(watchRaw[i] == HIGH ? F("=HIGH") : F("=LOW "));
-    Serial.print(watchRaw[i] == LIMIT_ACTIVE ? F("* ") : F("  "));
+    Serial.print(watchRaw[i] == WATCH_ACTIVE[i] ? F("* ") : F("  "));
   }
   Serial.print(F("\n"));
 }
@@ -238,7 +247,7 @@ void readWatchPins() {
 
 void startWatch() {
   mode = WATCHING;
-  Serial.print(F("Raw pin levels, printed on change. * = active with current LIMIT_ACTIVE.\n"));
+  Serial.print(F("Raw pin levels, printed on change. * = active with current SHIPx_POSx_ACTIVE.\n"));
   Serial.print(F("Ship away from switch: HIGH = NO to GND, LOW = NC to GND. Any key exits.\n"));
   readWatchPins();
   printWatchLine();

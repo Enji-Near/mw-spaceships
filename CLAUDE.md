@@ -12,14 +12,14 @@
 - D16 (A2) → Ship 1 relay, to POS2
 - D18 (A4) → Ship 2 relay, to POS1. Also I2C SDA: don't start Wire while it drives a relay.
 - D20 (A6) → Ship 2 relay, to POS2
-- D6 ← Ship 1 limit, POS1
-- D7 ← Ship 1 limit, POS2
-- D8 ← Ship 2 limit, POS1
-- D9 ← Ship 2 limit, POS2
+- D6 ← Ship 1 limit, POS2
+- D7 ← Ship 1 limit, POS1
+- D8 ← Ship 2 limit, POS2
+- D9 ← Ship 2 limit, POS1
 - D13 → onboard status LED: slow blink = OK, fast blink = fault
 - D0/D1 reserved (hardware USART). Spare: D2–D5, D10–D12, D15 (A1), D17 (A3), D19 (A5), D21 (A7).
 - Relays: 12V optocoupler modules, the same type as the Castle Scenes project. Trigger polarity to be verified on the bench, then set `RELAY_ON`.
-- Limit switches: assumed NO to GND with pull-up (`LIMIT_ACTIVE LOW`). Unverified until the bench test.
+- Limit switches (bench-verified 2026-10-19): all NC to GND (active HIGH), with pull-up.
 - Limit input filter: 10 kΩ pull-up, 1 kΩ series, 100 nF to GND at the pin. OK ranges: pull-up 2.2–10 kΩ, series 470 Ω–2.2 kΩ (keep small vs the 20–50 kΩ internal pull-up), cap 47–470 nF (ATmega4809 DS40002016B, Table 4-16).
 - 12V supply: unknown. Motor running and stall current: unknown. No input fuse.
 - Buses: none. Serial: USB at 115200 baud.
@@ -37,7 +37,7 @@
 - Pin every library version in `lib_deps` for reproducible builds. None are used yet.
 - Debug output behind `#define DEBUG 1/0`, one switch to silence it for deployment.
 - No `delay()` in the live loop, because it blocks the watchdog and the other ship.
-- Motor control goes only through `motorStop/ToPos1/ToPos2`, and polarity is set only in the `RELAY_ON` and `LIMIT_ACTIVE` defines. Why: each rule is enforced in one place.
+- Motor control goes only through `motorStop/ToPos1/ToPos2`, and polarity is set only in the `RELAY_ON` and `SHIPx_POSx_ACTIVE` defines. Why: each rule is enforced in one place.
 
 ## Workflow rules
 - Direct, literal language, in bullets. Minimal explanation unless I ask; give the why in one short clause.
