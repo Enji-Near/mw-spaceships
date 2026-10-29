@@ -1,59 +1,28 @@
 #include <Arduino.h>
 #include <avr/wdt.h>
-#include "ship_hardware.h"
+#include "ship_motion.h"
 
-/*****  Space Ships — v0.2  *****
- *  Platform: Arduino Nano Every (ATmega4809, 5V logic)
- *
- *  Two spaceships shuttle back and forth on rope-and-pulley "clotheslines".
- *  Per ship: one 12V DC motor, 2 relays (polarity reversal), 2 limit switches.
- *  Cycle (repeats while powered, each ship independent):
- *    move to POS2 → hit limit → stop → dwell → move to POS1 → hit limit → stop → dwell → ...
- *
- *  Relay wiring — 2x SPDT relays per motor ("two-relay H-bridge"):
- *    Motor terminal A → COM of relay "TO_POS1"; motor terminal B → COM of relay "TO_POS2"
- *    Each relay: NC → GND (12V return), NO → +12V
- *    Both OFF = both motor terminals on GND = stopped AND braked
- *    One ON   = motor driven in that direction
- *    Both ON  = both terminals on +12V = also stopped (no supply short in this wiring),
- *               but the code still never does it.
- *
- *  Relay modules: 12V optocoupler modules, trigger jumper set to H (high-level trigger).
- *    WHY H: in L mode on a 12V module, a 5V "HIGH" from the Arduino may not fully
- *    turn the input off (the module's input side sits at 12V). H mode avoids that,
- *    and a floating pin during reset/upload leaves the relay OFF. Verify on the bench.
- *
- *  Limit switches — wired pin → switch → GND, INPUT_PULLUP.
- *    Bench-verified 2026-10-19 (12V test): all NC (active HIGH).
- *    NC: a broken wire reads as "at limit" and stops the motor (fail-safe).
+/*****  Space Ships — v0.4 live firmware  *****
+ *  Platform: Arduino Nano Every (ATmega4809, 5V logic). One DRV8871 per ship.
+ *  Cycle per ship (independent): move → hit limit → brake → DWELL_TIME → reverse, repeating.
+ *  Speed per ship from ship_config.h: MODE_STEADY or MODE_RAMP. Fixed values, nothing adapts.
+ *  All tunable values: include/ship_config.h. Motor and limit code: ship_motion.cpp (shared).
  *
  *  Safety layers:
- *    1. Move timeout — stop if the target limit is never reached (slipped rope, jam, dead switch)
- *    2. Wrong-way check — limit BEHIND the ship still active after LIMIT_CLEAR_TIME
- *       = motor wired backwards or ship jammed
+ *    1. Move timeout — target limit never reached (slipped rope, jam, dead switch)
+ *    2. Wrong-way check — limit behind the ship still active after LIMIT_CLEAR_TIME
  *    3. Both-limits check — mechanically impossible → wiring fault
- *    4. Fault → cool-down → retry; lockout after MAX_FAULTS in a row (power cycle clears)
- *    5. Hardware watchdog (~2 s) — any software hang resets to a safe boot state
- *
- *  Status LED (D13, onboard): slow blink = running, fast blink = fault on either ship.
- *  Avoid D0/D1 — hardware USART (Serial1).
- *********************************/
+ *    4. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
+ *    5. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
+ *********************************************/
 
-#define DEBUG 1  // 1 = serial debug output (115200 baud), 0 = deployment
-
-// Pins, RELAY_ON/OFF, SHIPx_POSx_ACTIVE, WDT_TIMEOUT: include/ship_hardware.h (shared with bench_test)
-
-/****** Timing Constants ******/
-#define LIMIT_DEBOUNCE     20UL     // Limit must read steady this long (ms).
-                                    // Longer = more noise immunity, but more overtravel past the switch.
-#define DWELL_TIME         5000UL   // Pause at each end (ms)
-#define MOVE_TIMEOUT       64000UL  // Max end-to-end travel (ms): 1.5x slowest bench avg (Ship 2 to POS1, 42387 ms)
-#define LIMIT_CLEAR_TIME   1500UL   // Ship must leave the limit behind it within this time (ms)
-#define FAULT_RETRY_TIME   10000UL  // Cool-down before retrying after a fault (ms).
-                                    // Lets a stalled motor cool and a snag clear. MAX_FAULTS bounds total stall time.
-#define MAX_FAULTS         3        // Consecutive faults before lockout
-#define BLINK_NORMAL       1000UL   // Status LED toggle interval, running (ms)
-#define BLINK_FAULT        150UL    // Status LED toggle interval, fault (ms)
+// Ramp needs calibrated values: fail the build, not the display.
+#if (SHIP1_MODE == MODE_RAMP) && (SHIP1_STEADY_TRIP_MS == 0 || SHIP1_MIN_DUTY == 0 || SHIP1_MIN_DUTY >= SHIP1_STEADY_DUTY)
+  #error "Ship 1 RAMP: calibration values missing. Run bench_test t, m, r, then paste 'p' output."
+#endif
+#if (SHIP2_MODE == MODE_RAMP) && (SHIP2_STEADY_TRIP_MS == 0 || SHIP2_MIN_DUTY == 0 || SHIP2_MIN_DUTY >= SHIP2_STEADY_DUTY)
+  #error "Ship 2 RAMP: calibration values missing. Run bench_test t, m, r, then paste 'p' output."
+#endif
 
 /****** Types ******/
 enum ShipState {
@@ -61,80 +30,29 @@ enum ShipState {
   DWELL_AT_POS1,
   MOVING_TO_POS2,
   DWELL_AT_POS2,
-  FAULT,        // Motor off, waiting FAULT_RETRY_TIME, then retry
-  LOCKED_OUT    // Motor off until power cycle — too many faults in a row
+  FAULT,        // Braked, waiting FAULT_RETRY_TIME, then retry
+  LOCKED_OUT    // Braked until power cycle
 };
 
-// One debounced limit switch
-struct LimitSwitch {
-  uint8_t pin;
-  uint8_t activeLevel;      // Pin level at the limit (NO = LOW, NC = HIGH)
-  bool active;              // Debounced: true = ship is at this limit
-  bool lastRaw;             // Last raw reading
-  unsigned long lastChange; // When the raw reading last changed
-};
-
-// Everything that belongs to one ship
 struct Ship {
-  uint8_t id;
-  uint8_t relayToPos1;
-  uint8_t relayToPos2;
-  LimitSwitch limitPos1;
-  LimitSwitch limitPos2;
+  ShipIO &io;
+  const ShipTuning &tune;
   ShipState state;
-  ShipState lastMove;       // Last direction of travel — used to choose retry direction
-  unsigned long stateStart; // When the current state began
-  uint8_t faultCount;       // Consecutive faults — reset on every successful arrival
+  ShipState lastMove;       // Last direction of travel, for the retry direction
+  unsigned long stateStart;
+  uint8_t faultCount;       // Consecutive faults, reset on every arrival
 };
 
-/****** Objects ******/
-Ship ship1 = { 1, SHIP1_RELAY_TO_POS1, SHIP1_RELAY_TO_POS2, { SHIP1_LIMIT_POS1, SHIP1_POS1_ACTIVE }, { SHIP1_LIMIT_POS2, SHIP1_POS2_ACTIVE } };
-Ship ship2 = { 2, SHIP2_RELAY_TO_POS1, SHIP2_RELAY_TO_POS2, { SHIP2_LIMIT_POS1, SHIP2_POS1_ACTIVE }, { SHIP2_LIMIT_POS2, SHIP2_POS2_ACTIVE } };
-
-/****** Limit Switch Helpers ******/
-void limitBegin(LimitSwitch &sw) {
-  pinMode(sw.pin, INPUT_PULLUP);
-  sw.lastRaw    = (digitalRead(sw.pin) == sw.activeLevel);
-  sw.active     = sw.lastRaw;   // Trust first reading at boot
-  sw.lastChange = millis();
-}
-
-// Accept a new level only after it has been steady for LIMIT_DEBOUNCE ms.
-// Rejects contact bounce and short noise spikes picked up by long wires.
-void limitUpdate(LimitSwitch &sw) {
-  bool raw = (digitalRead(sw.pin) == sw.activeLevel);
-  if (raw != sw.lastRaw) {
-    sw.lastRaw    = raw;
-    sw.lastChange = millis();
-  } else if (millis() - sw.lastChange >= LIMIT_DEBOUNCE) {
-    sw.active = raw;
-  }
-}
-
-/****** Motor Control — 2-Relay Polarity Reversal ******/
-// Each function turns the OPPOSITE relay off before turning its own on.
-// The state machine only starts a move from a stopped state, so the dwell
-// (or fault cool-down) is the dead time between directions — no delay() needed.
-void motorStop(Ship &s) {
-  digitalWrite(s.relayToPos1, RELAY_OFF);
-  digitalWrite(s.relayToPos2, RELAY_OFF);
-}
-
-void motorToPos1(Ship &s) {
-  digitalWrite(s.relayToPos2, RELAY_OFF);
-  digitalWrite(s.relayToPos1, RELAY_ON);
-}
-
-void motorToPos2(Ship &s) {
-  digitalWrite(s.relayToPos1, RELAY_OFF);
-  digitalWrite(s.relayToPos2, RELAY_ON);
-}
+Ship ships[2] = {
+  { shipIO[0], SHIP_TUNING[0], LOCKED_OUT, MOVING_TO_POS1, 0, 0 },
+  { shipIO[1], SHIP_TUNING[1], LOCKED_OUT, MOVING_TO_POS1, 0, 0 }
+};
 
 /****** Debug Output ******/
 void debugState(const Ship &s) {
   #if DEBUG
   Serial.print(F("Ship "));
-  Serial.print(s.id);
+  Serial.print(s.io.id);
   switch (s.state) {
     case MOVING_TO_POS1: Serial.print(F(": moving to position 1\n")); break;
     case DWELL_AT_POS1:  Serial.print(F(": at position 1, dwelling\n")); break;
@@ -147,16 +65,17 @@ void debugState(const Ship &s) {
 }
 
 /****** State Machine ******/
-// Single entry point for every state change: sets state, timestamps it,
-// and applies the motor output for that state. Keeps outputs and state in sync.
+Dir moveDir(ShipState st) { return (st == MOVING_TO_POS1) ? TO_POS1 : TO_POS2; }
+
+// Single entry point for every state change, so outputs and state stay in sync.
 void enterState(Ship &s, ShipState next) {
   s.state      = next;
   s.stateStart = millis();
-
-  switch (next) {
-    case MOVING_TO_POS1: s.lastMove = next; motorToPos1(s); break;
-    case MOVING_TO_POS2: s.lastMove = next; motorToPos2(s); break;
-    default:             motorStop(s); break;  // Dwell, fault, lockout: motor OFF
+  if (next == MOVING_TO_POS1 || next == MOVING_TO_POS2) {
+    s.lastMove = next;
+    motorDrive(s.io, moveDir(next), tripDuty(s.tune, 0));
+  } else {
+    motorBrake(s.io);  // Dwell, fault, lockout
   }
   debugState(s);
 }
@@ -165,7 +84,7 @@ void shipFault(Ship &s, const __FlashStringHelper *reason) {
   s.faultCount++;
   #if DEBUG
   Serial.print(F("Ship "));
-  Serial.print(s.id);
+  Serial.print(s.io.id);
   Serial.print(F(" fault "));
   Serial.print(s.faultCount);
   Serial.print(F("/"));
@@ -177,97 +96,68 @@ void shipFault(Ship &s, const __FlashStringHelper *reason) {
   enterState(s, (s.faultCount >= MAX_FAULTS) ? LOCKED_OUT : FAULT);
 }
 
-// Retry after cool-down. If the ship is at a limit, head for the other end.
-// If it stopped mid-track, go back the way it came — that path last worked.
+// At a limit: head for the other end. Mid-track: go back the way it came (that path last worked).
 void shipRecover(Ship &s) {
-  if (s.limitPos1.active && s.limitPos2.active) {
-    shipFault(s, F("both limits active — check wiring"));
-  } else if (s.limitPos1.active) {
-    enterState(s, MOVING_TO_POS2);
-  } else if (s.limitPos2.active) {
-    enterState(s, MOVING_TO_POS1);
-  } else {
-    enterState(s, (s.lastMove == MOVING_TO_POS1) ? MOVING_TO_POS2 : MOVING_TO_POS1);
-  }
+  if (s.io.pos1.active)      enterState(s, MOVING_TO_POS2);
+  else if (s.io.pos2.active) enterState(s, MOVING_TO_POS1);
+  else enterState(s, (s.lastMove == MOVING_TO_POS1) ? MOVING_TO_POS2 : MOVING_TO_POS1);
 }
 
-// Shared logic for both directions of travel.
-//   ahead  = the limit the ship is driving toward
-//   behind = the limit the ship is driving away from
-void updateMove(Ship &s, LimitSwitch &ahead, LimitSwitch &behind, ShipState arrivedState) {
+void updateMove(Ship &s, ShipState arrivedState) {
+  Dir d = moveDir(s.state);
   unsigned long elapsed = millis() - s.stateStart;
 
-  if (ahead.active) {
-    s.faultCount = 0;              // Successful arrival clears the fault history
+  if (aheadOf(s.io, d).active) {
+    s.faultCount = 0;
     enterState(s, arrivedState);
-  }
-  else if (behind.active && elapsed >= LIMIT_CLEAR_TIME) {
+  } else if (behindOf(s.io, d).active && elapsed >= LIMIT_CLEAR_TIME) {
     shipFault(s, F("limit behind ship still active — motor reversed or ship jammed"));
-  }
-  else if (elapsed >= MOVE_TIMEOUT) {
+  } else if (elapsed >= MOVE_TIMEOUT) {
     shipFault(s, F("move timeout — limit never reached"));
+  } else {
+    motorDrive(s.io, d, tripDuty(s.tune, elapsed));  // Only rewrites PWM when duty changes
   }
 }
 
 void updateShip(Ship &s) {
-  limitUpdate(s.limitPos1);
-  limitUpdate(s.limitPos2);
+  shipUpdateLimits(s.io);
 
-  // Both limits active is mechanically impossible → wiring or switch fault.
-  // Skipped in FAULT/LOCKED_OUT: the motor is already off there.
-  if (s.state != FAULT && s.state != LOCKED_OUT &&
-      s.limitPos1.active && s.limitPos2.active) {
+  // Skipped in FAULT/LOCKED_OUT: already braked there.
+  if (s.state != FAULT && s.state != LOCKED_OUT && bothLimits(s.io)) {
     shipFault(s, F("both limits active — check wiring"));
     return;
   }
 
   unsigned long elapsed = millis() - s.stateStart;
-
   switch (s.state) {
-    case MOVING_TO_POS1: updateMove(s, s.limitPos1, s.limitPos2, DWELL_AT_POS1); break;
-    case MOVING_TO_POS2: updateMove(s, s.limitPos2, s.limitPos1, DWELL_AT_POS2); break;
+    case MOVING_TO_POS1: updateMove(s, DWELL_AT_POS1); break;
+    case MOVING_TO_POS2: updateMove(s, DWELL_AT_POS2); break;
     case DWELL_AT_POS1:  if (elapsed >= DWELL_TIME) enterState(s, MOVING_TO_POS2); break;
     case DWELL_AT_POS2:  if (elapsed >= DWELL_TIME) enterState(s, MOVING_TO_POS1); break;
     case FAULT:          if (elapsed >= FAULT_RETRY_TIME) shipRecover(s); break;
-    case LOCKED_OUT:     break;  // Stay stopped until power cycle
+    case LOCKED_OUT:     break;
   }
 }
 
 /****** Ship Startup ******/
-void shipBegin(Ship &s) {
-  // Relays first, so motors are held OFF as early as possible.
-  // megaAVR core: pinMode(OUTPUT) drives the pin at its OUT register value (LOW)
-  // until the next digitalWrite. With RELAY_OFF = LOW that is already the safe state.
-  pinMode(s.relayToPos1, OUTPUT);
-  pinMode(s.relayToPos2, OUTPUT);
-  motorStop(s);
-
-  limitBegin(s.limitPos1);
-  limitBegin(s.limitPos2);
+void shipStart(Ship &s) {
+  shipBegin(s.io);  // Driver braked first, then limits read
   s.faultCount = 0;
 
-  // Position is unknown after power-up — work it out from the limits.
-  if (s.limitPos1.active && s.limitPos2.active) {
-    shipFault(s, F("both limits active at boot — check wiring"));
-  } else if (s.limitPos1.active) {
-    enterState(s, DWELL_AT_POS1);
-  } else if (s.limitPos2.active) {
-    enterState(s, DWELL_AT_POS2);
-  } else {
-    enterState(s, MOVING_TO_POS1);  // Mid-track: home to position 1
-  }
+  // Position unknown after power-up: work it out from the limits.
+  if (bothLimits(s.io))      shipFault(s, F("both limits active at boot — check wiring"));
+  else if (s.io.pos1.active) enterState(s, DWELL_AT_POS1);
+  else if (s.io.pos2.active) enterState(s, DWELL_AT_POS2);
+  else                       enterState(s, MOVING_TO_POS1);  // Mid-track: home to POS1
 }
 
 /****** Status LED ******/
-bool isFaulted(const Ship &s) {
-  return (s.state == FAULT || s.state == LOCKED_OUT);
-}
+bool isFaulted(const Ship &s) { return (s.state == FAULT || s.state == LOCKED_OUT); }
 
 void updateStatusLED() {
   static unsigned long lastToggle = 0;
   static bool ledOn = false;
-
-  unsigned long interval = (isFaulted(ship1) || isFaulted(ship2)) ? BLINK_FAULT : BLINK_NORMAL;
+  unsigned long interval = (isFaulted(ships[0]) || isFaulted(ships[1])) ? BLINK_FAULT : BLINK_NORMAL;
   if (millis() - lastToggle >= interval) {
     lastToggle = millis();
     ledOn = !ledOn;
@@ -279,23 +169,18 @@ void updateStatusLED() {
 void setup() {
   #if DEBUG
   Serial.begin(115200);
-  Serial.print(F("Space Ships v0.2: Online\n"));
+  Serial.print(F("Space Ships v0.4: Online\n"));
   #endif
-
   pinMode(STATUS_LED, OUTPUT);
-
-  shipBegin(ship1);
-  shipBegin(ship2);
-
-  // Watchdog — enabled last, after all setup work is done.
-  // Loop is fully non-blocking, so wdt_reset() runs thousands of times per second.
-  wdt_enable(WDT_TIMEOUT);
+  shipStart(ships[0]);
+  shipStart(ships[1]);
+  wdt_enable(WDT_TIMEOUT);  // Last, after setup. Loop is non-blocking.
 }
 
 /****** Main Loop ******/
 void loop() {
   wdt_reset();
-  updateShip(ship1);
-  updateShip(ship2);
+  updateShip(ships[0]);
+  updateShip(ships[1]);
   updateStatusLED();
 }

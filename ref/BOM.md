@@ -1,79 +1,68 @@
 # Space Ships — Bill of Materials
 
-As of 2026-10-16.
+As of 2026-10-24. Redesign v0.4: relays replaced by one DRV8871 motor driver per ship.
 
-Parts for one complete Space Ships controller (2 ships, 2 motors, 4 relays, 4 limit switches). Matches `include/ship_hardware.h` and `ref/wiring-diagram.svg` (v0.2).
+Parts for one complete Space Ships controller (2 ships, 2 motors, 2 drivers, 4 limit switches). Matches the v0.4 pin map in `CLAUDE.md` and `ref/wiring-diagram.svg` (v0.4).
 
 ## Controller board
 
-All through-hole, on perfboard. The Nano sits in female headers so it lifts out for replacement.
+All through-hole, on perfboard. The Nano and both drivers sit in female headers so each lifts out for replacement.
 
 | Ref | Qty | Part | Value / rating | Why |
 | --- | --- | --- | --- | --- |
 | U1 | 1 | Arduino Nano Every (ABX00028) | 5V logic, VIN 12V | Controller |
-| — | 2 | Female header, 1×15 | 2.54 mm pitch | Socket for U1, swap without desoldering |
-| C1 | 1 | Electrolytic capacitor | 1000 µF, 25 V min (470 µF OK) | 12V bulk: covers motor start-up dips |
+| — | 2 | Female header, 1×15 | 2.54 mm pitch | Socket for U1 |
+| U2–U3 | 2 + 2 spare | Adafruit DRV8871 motor driver (product 3190) | 6.5–45 V, 3.6 A peak; current limit about 2.1 A with the fitted 30 kΩ R_ILIM | One per ship: direction, PWM speed, current limit, no contacts to wear |
+| — | to suit | Male header pins (on U2–U3) + female headers (on board) | 2.54 mm | Plug-in drivers. Check the driver's power and output pad pitch fits 0.1" headers |
+| C1 | 1 | Electrolytic capacitor | 1000 µF, 25 V min | 12V bulk at the board input |
 | C2 | 1 | Electrolytic capacitor | 10 µF, 25 V min | Local reservoir at Nano VIN |
-| C3 | 1 | Ceramic capacitor | 100 nF, 50 V, X7R | High-frequency decoupling at Nano VIN, close to the pin |
-| R1–R4 | 4 | Resistor | 10 kΩ, ¼ W (2.2–10 kΩ OK) | Limit input pull-ups to +5V; stiffer than the internal pull-up |
-| R5–R8 | 4 | Resistor | 1 kΩ, ¼ W | Limit input series resistor; forms RC filter with C4–C7, limits surge current |
+| C3 | 1 | Ceramic capacitor | 100 nF, 50 V, X7R | Decoupling at Nano VIN, close to the pin |
+| C8–C9 | 2 | Electrolytic capacitor | 47 µF, 25 V min | Bulk at each driver VM (TI typical application) |
+| C10–C11 | 2 | Ceramic capacitor | 100 nF, 50 V | Bypass at each driver VM, close to the pins (TI typical application) |
+| R1–R4 | 4 | Resistor | 10 kΩ, ¼ W (2.2–10 kΩ OK) | Limit input pull-ups to +5V |
+| R5–R8 | 4 | Resistor | 1 kΩ, ¼ W | Limit input series resistor; RC filter with C4–C7 |
 | C4–C7 | 4 | Ceramic capacitor | 100 nF, 50 V | Limit input filter, at the Arduino pin |
-| R9–R12 | 4 | Resistor | 10 kΩ, ¼ W | Pull-down on each relay IN line; holds relays off while the Nano resets or uploads |
-| J1 | 1 | Screw terminal, 2-pos | 5.08 mm, ≥ 10 A | 12V input |
-| J2–J5 | 4 | Screw terminal, 2-pos (pluggable preferred) | 3.5 or 5.08 mm | Limit switches, signal + GND |
-| J6–J9 | 4 | Male header, 1×3 | 2.54 mm | To relay modules: 12V, GND, IN |
+| F1 | 1 + spares | Fuse, 5×20 mm, time-lag (slow-blow), ceramic | 3.15 A (or 3 A) | 12V input protection. Time-lag rides through C1 charging and motor starts |
+| FH1 | 1 | PCB fuse holder BLX-A, 5×20 mm | 250 V, 6.3 A | Tool-free fuse swap. Test-fit on the perfboard before soldering |
+| J1 | 1 | Screw terminal, 2-pos | 5.08 mm | 12V input |
+| J2–J5 | 4 | Screw terminal, 2-pos | 3.5 or 5.08 mm | Limit switches, signal + GND |
+| J6–J7 | 2 | Screw terminal, 2-pos | 3.5 or 5.08 mm | Motor outputs (from each driver OUT1/OUT2) |
 | — | 1 | Perfboard | ~70 × 90 mm | Board |
 | — | 4 | M3 standoffs + screws | — | Mount board in enclosure |
-| LED1, R13 | 1 each | 5 mm LED + resistor (optional) | 1 kΩ | Panel status light on D13; only if client wants it (question O5) |
+| LED1, R13 | 1 each | 5 mm LED + resistor (optional) | 1 kΩ | Panel status light on D13; only if wanted |
+
+No external pull-downs on the driver inputs: the DRV8871 has 100 kΩ internal pull-downs on IN1/IN2, so a Nano reset or power loss leaves the driver in coast/sleep.
 
 ## Off-board parts
 
-These mount in the enclosure or at the motors, not on the perfboard. Relay modules have their own screw terminals, so motor wires land directly on them.
-
 | Ref | Qty | Part | Value / rating | Why |
 | --- | --- | --- | --- | --- |
-| K1–K4 | 4 + 2 spare | 12V 1-channel relay module, optocoupler, H/L trigger jumper | 12V coil; contacts 10 A at 30 VDC | Motor direction; set jumper to H. Pending client relay inventory |
-| D1–D2 | 2 | TVS diode, bidirectional, P6KE18CA | 15.3 V standoff, 600 W, DO-15 | Across each motor's terminals; clamps spikes that arc relay contacts |
-| C8–C9 | 2 | Ceramic capacitor | 100 nF, 50 V | Across each motor's terminals, soldered at the motor; cuts brush noise |
-| F1 | 1 | Inline fuse holder + slow-blow fuse | Rating TBD | Not fitted: no input fuse (decided 2026-10-16) |
-| SW1–SW4 | 4 | Limit microswitch | C/NO/NC terminals preferred | End-of-travel; check what the client has (question M3–M4) |
-| — | 12 | Jumper wire, female–female | 2.54 mm Dupont | Board J6–J9 to relay module inputs (3 per module) |
+| SW1–SW4 | 4 | Limit microswitch | NC wired (bench-verified 2026-10-19) | End-of-travel |
 | — | as needed | Twisted-pair cable | 22 AWG | Limit switch runs; keeps noise pickup low |
-| — | as needed | Hook-up wire, red + black | 22 AWG (decided 2026-10-16; slower ships acceptable) | 12V power and motor runs |
-| — | 1 | Enclosure | Size TBD | Client question I1 |
-| M1–M2, PSU | — | Motors and 12V supply | Existing (client) | Not purchased; specs pending |
+| — | as needed | Hook-up wire, red + black | 22 AWG | 12V power and motor runs |
+| — | 1 | Enclosure | Size TBD | Location and access |
+| M1–M2, PSU | — | Motors and 12V supply | Existing (client) | Motors run under 1 A; supply specs pending |
 
-## Alternate: client's RZ-12-C relays
+## Removed in v0.4
 
-Use this only if the client prefers their RZ-12-C stock over relay modules. Its 1 A contacts may be too small for the motors, so measure motor current first.
-
-| Change | Qty | Part | Value / rating | Why |
-| --- | --- | --- | --- | --- |
-| Replaces K1–K4 modules | 4 | RZ-12-C relay | 12V coil, DPDT, 1 A contacts | Client stock |
-| Add | 4 | Relay socket | To match RZ-12-C pinout; check one in hand | Swap without desoldering |
-| Add U2 | 1 | ULN2003A + DIP-16 socket | 500 mA per channel | Drives 12V coils from 5V pins; has built-in flyback diodes |
-| Remove | — | R9–R12 (10 kΩ) | — | ULN2003A has internal input pull-downs |
-| Remove | — | J6–J9, jumper wires | — | Relays sit on the board |
-
-Code stays the same (RELAY_ON = HIGH) in both options.
+| Part | Why |
+| --- | --- |
+| K1–K4 relay modules, R9–R12 pull-downs, relay headers, Dupont jumpers | Replaced by U2–U3 |
+| D1–D2 TVS diodes, motor-side 100 nF caps (never fitted) | Not needed with the driver; a cap across a PWM-driven motor causes current spikes |
 
 ## Pending values
 
-The board can be built now. The items below land off-board and can be added once measured or confirmed.
-
 | Item | Waiting on | How it's decided |
 | --- | --- | --- |
-| F1 fuse rating | Motor running current | Closed: no input fuse fitted (decided 2026-10-16) |
-| Motor wire gauge | Motor running current | Closed: 22 AWG throughout, about 1 V drop on a 15' run at 2 A; slower ships acceptable |
-| Relay part (modules vs RZ-12-C) | Client relay inventory (R1–R3); motor stall current | Stall current ≈ 12 V ÷ winding resistance; must sit within contact rating |
-| Limit switch wiring (NO vs NC) | Bench test of the switches | Done 2026-10-19: all NC; set per switch in `SHIPx_POSx_ACTIVE` |
-| LED1 / R13 | Client question O5 | Fit only if staff want a visible status light |
-| Enclosure | Client question I1 | Location and access |
+| Ship speeds and STEADY/RAMP settings | Speed-setting discussion | Per ship |
+| Travel times, MOVE_TIMEOUT | On-site timing after install | 1.5× slowest average, re-timed at final speeds |
+| PWM frequency | Firmware testing | Default ~1 kHz may whine; raising it interacts with Nano timing |
+| Driver pad pitch vs 0.1" headers | Board in hand | Check before soldering headers |
+| LED1 / R13 | Client preference | Fit only if staff want a visible status light |
 
 ## Sources
 
-- [Arduino Nano Every datasheet (ABX00028)](https://docs.arduino.cc/resources/datasheets/ABX00028-datasheet.pdf) — VIN regulator up to 21 V, pinout
-- [P6KE18CA, element14 listing](https://nz.element14.com/yageo/p6ke18ca-b/tvs-diode-bidir-15-3v-600w-do/dp/3788243) — bidirectional, 15.3 V standoff, 600 W, DO-15
-- [12V 1-channel relay module user guide (Phipps Electronics)](https://www.phippselectronics.com/support/users-guide-12v-1-channel-relay-module-high-low-trigger-optocoupler/) — 3.3/5 V trigger, H/L jumper, 10 A at 30 VDC
-- [TI ULN2003A datasheet](https://www.ti.com/lit/ds/symlink/uln2003a.pdf) — 5 V input, 500 mA outputs, clamp diodes, internal pull-downs
-- [NTE R40 series datasheet (RZ-12-C equivalent)](https://cdn.eicom.ru/media/PDF/4310510.pdf) — coil and contact ratings
+- [Arduino Nano Every datasheet (ABX00028)](https://docs.arduino.cc/resources/datasheets/ABX00028-datasheet.pdf) — VIN up to 21 V, pinout, PWM pins
+- [TI DRV8871 datasheet](https://www.ti.com/lit/gpn/drv8871) — 6.5–45 V, 3.6 A peak, I_TRIP = 64 / R_ILIM (kΩ), 100 kΩ input pull-downs, 0.1 µF + 47 µF typical VM capacitors
+- [Adafruit DRV8871 breakout guide (product 3190)](https://learn.adafruit.com/adafruit-drv8871-brushed-dc-motor-driver-breakout/overview) — 30 kΩ R_ILIM fitted (~2 A)
+- [Littelfuse 215 series 5×20 mm time-lag fuse datasheet](https://littelfuse.com/%7E/media/electronics/datasheets/fuses/littelfuse_fuse_215_datasheet.pdf.pdf) — time-lag characteristics (example part)
