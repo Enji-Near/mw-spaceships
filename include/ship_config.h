@@ -65,11 +65,18 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 #define MIN_TOLERANCE       250UL   // Min speed: first step at or above MIN_TARGET - this wins
 #define MIN_STEP_PCT        10      // Min speed: step down by this % of steady each try
 
-/****** Imperial March (bench_test secret key i; live: reset button) ******/
-#define MARCH_ON_RESET     1      // Live: 1 = reset button plays the march, then the normal cycle. Power-up never does.
+/****** Imperial March (bench_test secret key i; live: button and power-up) ******/
+// The reset button can't trigger it: USB connect also resets as "external", and without USB it didn't register.
+#define MARCH_ON_POWER_UP  1      // Live: play at every power-up (not after a watchdog reset, upload or USB connect)
+#define MARCH_ON_BUTTON    1      // Live: button press plays it whenever the cycle is running (ignored during the song)
+const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same debounce as the limits. Also I2C SDA: no Wire.
+#define MARCH_BRAKE_MS     500UL  // Button: brake this long before homing, so a ship never reverses at speed
 #define MARCH_DUTY_PCT     50     // Fixed duty while singing: 50% PWM is the loudest note, half of hyper speed
 #define MARCH_OCTAVE_DOWN  1      // 0 = as written, 1 = one octave lower. Lower = more current ripple = louder
                                   // (ripple ~ 1/f, unverified on these motors). Check motor temperature after.
+#define MARCH_LIMIT_CLEAR_MS 1110UL  // Live wrong-way time while singing (tone PWM is slower). Measured with
+                                     // bench_test i ("left the limit after"), max + 500. 0 = not measured: live won't build.
+                                     // 2026-11-06, 4 runs: Ship 1 156-198 ms (both ways), Ship 2 604-610 ms.
 #define MARCH_START_DELAY_MS 0UL     // After homing, before the first note. 0: homing time is the lead-in
 #define MARCH_TEMPO_PCT    100    // Note lengths in %, 100 = as written (~26 s)
 #define MARCH_NOTE_GAP_MS  40UL   // Silence at the end of each note, so repeated notes are heard

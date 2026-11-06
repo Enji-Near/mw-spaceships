@@ -48,6 +48,7 @@ struct Runner {
   bool boosted;
   bool atLimit;             // Last move ended on the limit (not on stopAfter)
   bool stopOnClear;         // Wrong-way calibration: end the move when the limit behind releases
+  bool clearSeen;           // March: release time already printed
   unsigned long lastMs;     // Last move time, ms
   // Pause before the next step
   bool waiting;
@@ -258,6 +259,7 @@ void startMove(uint8_t i, Dir d, Profile p, uint8_t duty) {
   r.boostAfter = 0;
   r.boosted    = false;
   r.stopOnClear = false;
+  r.clearSeen   = false;
   r.moving     = true;
 }
 
@@ -686,6 +688,13 @@ void updateRunner(uint8_t i) {
   unsigned long e = millis() - r.start;
 
   LimitSwitch &behind = behindOf(s, r.dir);
+  if (task == T_MARCH && marchPlaying && !r.clearSeen && !behind.active) {  // For MARCH_LIMIT_CLEAR_MS
+    r.clearSeen = true;
+    printShip(i);
+    Serial.print(F("left the limit after "));
+    Serial.print(arrivalMs(behind, r.start));
+    Serial.print(F(" ms\n"));
+  }
 
   if (bothLimits(s)) {
     abortAll(i, F("both limits active — check wiring"));
@@ -918,8 +927,11 @@ unsigned long marchStart = 0;
 bool marchArmed = false;            // Both ships home, start delay running
 unsigned long marchArmedAt = 0;
 
-// Mid-track: carry on the way it was last going. Never driven since boot: POS1, same as live.
-Dir marchHomeDir(uint8_t i) { return motorUsed[i] ? lastDir[i] : TO_POS1; }
+// Ship 2 always starts at POS2: toward POS1 its PWM pin (D5) does drive/brake like Ship 1, so every
+// song sounds the same. Ship 1 sounds the same both ways: mid-track it carries on the way it was going.
+bool marchAtStart(uint8_t i) { return (i == 1) ? shipIO[1].pos2.active : atALimit(i); }
+Dir marchHomeDir(uint8_t i)  { return (i == 1) ? TO_POS2 : (motorUsed[i] ? lastDir[i] : TO_POS1); }
+Dir marchSingDir(uint8_t i)  { return (i == 1) ? TO_POS1 : awayFromLimit(i); }
 
 // Home (silent, profile speed), then wait for the other ship: both start with the first note.
 void stepMarch(uint8_t i) {
@@ -927,7 +939,7 @@ void stepMarch(uint8_t i) {
   switch (r.step) {
     case 0:
       r.step = 1;
-      if (!atALimit(i)) {
+      if (!marchAtStart(i)) {
         Dir d = marchHomeDir(i);
         printShip(i);
         Serial.print(F("homing "));
@@ -985,9 +997,9 @@ void updateMarch() {
       if (!rn[i].active || rn[i].done) continue;
       printShip(i);
       Serial.print(F("singing "));
-      printDir(awayFromLimit(i));
+      printDir(marchSingDir(i));
       Serial.print(F("\n"));
-      startMove(i, awayFromLimit(i), P_CONST, pctToDuty(MARCH_DUTY_PCT));
+      startMove(i, marchSingDir(i), P_CONST, pctToDuty(MARCH_DUTY_PCT));
       rn[i].step = 3;
     }
     marchStart   = millis();

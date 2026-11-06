@@ -20,7 +20,8 @@
 - D4 ← Ship 2 limit, POS2 (away from motor)
 - Limit pins remapped 2026-11-05 so each POS1 terminal sits next to the Nano.
 - D13 → onboard status LED: slow blink = OK, fast blink = fault
-- D0/D1 reserved (hardware USART). Spare: D2, D11, D12, A0–A7 (D14–D21).
+- A4 (D18) ← Imperial March button, to GND, INPUT_PULLUP. Also I2C SDA: don't start Wire.
+- D0/D1 reserved (hardware USART). Spare: D2, D11, D12, A0–A3, A5–A7.
 - PWM pins on the Nano Every: D3, D5, D6, D9, D10 (core variant timer map). They share a clock with millis() (core `variant.c`, `wiring.c`), so changing PWM frequency needs care. Unverified until tested.
 - Driver logic (DRV8871 datasheet §7.3.1): IN1/IN2 = 0/0 coast then sleep after ~1 ms; 1/0 forward; 0/1 reverse; 1/1 brake. Inputs have 100 kΩ internal pull-downs (§6.5).
 - Stop = brake (1/1) at the end of each trip, during dwell, and in fault/lockout. Nano reset or power loss = inputs low = coast (motor unpowered; ship may drift).
@@ -35,7 +36,7 @@
 
 ## Toolchain and commands
 - VS Code + PlatformIO on Ubuntu Linux; repo on GitHub.
-- Envs: `mw_space_two_simple_ships` is the live display firmware (reset button plays the Imperial March, `MARCH_ON_RESET`); `bench_test` is a serial menu to jog ships (hold 5–8, speed set with j, default `JOG_PCT` 40%), watch the limit switches (w), calibrate steady speed (t) and minimum speed (m), shuttle at a typed duty % until stopped (d), set and test the take-off / hyper / cruise profile (a), measure the wrong-way time (c), run continuously with the current values (g), and print the calibration block for `include/ship_config.h` (p).
+- Envs: `mw_space_two_simple_ships` is the live display firmware (Imperial March at power-up and on the A4 button); `bench_test` is a serial menu to jog ships (hold 5–8, speed set with j, default `JOG_PCT` 40%), watch the limit switches (w), calibrate steady speed (t) and minimum speed (m), shuttle at a typed duty % until stopped (d), set and test the take-off / hyper / cruise profile (a), measure the wrong-way time (c), run continuously with the current values (g), and print the calibration block for `include/ship_config.h` (p).
 - Shared code: `include/ship_motion.h` + `src/ship_motion.cpp`, built into both envs.
 
 ## Code standards

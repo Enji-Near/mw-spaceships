@@ -15,10 +15,14 @@
  *    4. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
  *    5. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
  *
- *  Reset button (MARCH_ON_RESET): boot reads the reset cause. External reset only (not power-up,
- *  watchdog or upload) → Imperial March: each ship homes the way it was last going, both sing away
- *  from their limit, then the normal cycle carries on. Same safety checks; fault retries wait for the song.
+ *  Imperial March (MARCH_ON_POWER_UP, MARCH_ON_BUTTON on A4): Ship 1 homes the way it was going,
+ *  Ship 2 homes to POS2, both sing away from their limit, then the normal cycle carries on.
+ *  Same safety checks; fault retries wait for the song; faulted ships sit it out.
  *********************************************/
+
+#if (MARCH_ON_POWER_UP || MARCH_ON_BUTTON) && (MARCH_LIMIT_CLEAR_MS == 0)
+  #error "MARCH_LIMIT_CLEAR_MS is 0. Measure with bench_test i, or turn the march off."
+#endif
 
 // Surge needs a measured wrong-way time, or every trip faults: fail the build, not the display.
 #if (SHIP1_MODE == MODE_SURGE) && (SHIP1_LIMIT_CLEAR_MS == 0)
@@ -36,7 +40,8 @@ enum ShipState {
   DWELL_AT_POS2,
   FAULT,        // Braked, waiting FAULT_RETRY_TIME, then retry
   LOCKED_OUT,   // Braked until power cycle
-  MARCH_HOME_TO_POS1,  // Reset-button march: profile speed to a limit
+  MARCH_BRAKE,         // Button march: braked for MARCH_BRAKE_MS before homing
+  MARCH_HOME_TO_POS1,  // March: profile speed to a limit
   MARCH_HOME_TO_POS2,
   MARCH_READY,         // At a limit, braked, waiting for the song
   MARCH_SING_TO_POS1,  // MARCH_DUTY_PCT, tone PWM
@@ -44,7 +49,8 @@ enum ShipState {
   MARCH_DONE           // Reached a limit during the song, braked until it ends
 };
 
-enum MarchPhase { M_OFF, M_HOMING, M_DELAY, M_SONG };
+enum MarchPhase { M_OFF, M_BRAKE, M_HOMING, M_DELAY, M_SONG };
+
 MarchPhase marchPhase = M_OFF;
 unsigned long marchPhaseStart = 0;
 
@@ -79,6 +85,7 @@ void debugState(const Ship &s) {
     case DWELL_AT_POS2:  Serial.print(F(": at position 2, dwelling\n")); break;
     case FAULT:          Serial.print(F(": FAULT — retry after cool-down\n")); break;
     case LOCKED_OUT:     Serial.print(F(": LOCKED OUT — power cycle to clear\n")); break;
+    case MARCH_BRAKE:        Serial.print(F(": march, braking\n")); break;
     case MARCH_HOME_TO_POS1: Serial.print(F(": march, homing to position 1\n")); break;
     case MARCH_HOME_TO_POS2: Serial.print(F(": march, homing to position 2\n")); break;
     case MARCH_READY:        Serial.print(F(": march, ready\n")); break;
@@ -163,17 +170,14 @@ void updateMove(Ship &s, ShipState arrivedState) {
   }
 }
 
-// Song move: fixed duty with tone. Wrong-way time at least LIMIT_CLEAR_TIME: tone PWM changes speed.
+// Song move: fixed duty with tone. Own wrong-way time: tone PWM brakes longer each cycle, so it is slower.
 void updateSing(Ship &s) {
   Dir d = moveDir(s.state);
   unsigned long elapsed = millis() - s.stateStart;
-  unsigned long clear = clearMs(s.tune);
-  if (clear < LIMIT_CLEAR_TIME) clear = LIMIT_CLEAR_TIME;
-
   if (aheadOf(s.io, d).active) {
     s.faultCount = 0;
     enterState(s, MARCH_DONE);
-  } else if (behindOf(s.io, d).active && elapsed >= clear) {
+  } else if (behindOf(s.io, d).active && elapsed >= MARCH_LIMIT_CLEAR_MS) {
     shipFault(s, F("limit behind ship still active during the march"));
   } else {
     motorDriveTone(s.io, d, PCT_TO_DUTY(MARCH_DUTY_PCT));
@@ -201,6 +205,7 @@ void updateShip(Ship &s) {
     case MARCH_HOME_TO_POS2: updateMove(s, MARCH_READY); break;
     case MARCH_SING_TO_POS1:
     case MARCH_SING_TO_POS2: updateSing(s); break;
+    case MARCH_BRAKE:
     case MARCH_READY:
     case MARCH_DONE:         break;
   }
@@ -218,13 +223,53 @@ void shipStart(Ship &s) {
   else                       enterState(s, MOVING_TO_POS1);  // Mid-track: home to POS1
 }
 
-/****** Imperial March (reset button) ******/
-void marchShipStart(Ship &s) {
+/****** Imperial March (power-up, button) ******/
+// Ship 2 always starts at POS2: toward POS1 its PWM pin (D5) does drive/brake like Ship 1, so every
+// song sounds the same. Ship 1 sounds the same both ways: mid-track it carries on the way it was going.
+bool marchAtStart(const Ship &s) { return (s.io.id == 2) ? s.io.pos2.active : (s.io.pos1.active || s.io.pos2.active); }
+Dir marchSingDir(const Ship &s)  { return (s.io.id == 2 || !s.io.pos1.active) ? TO_POS1 : TO_POS2; }
+
+void marchShipEnter(Ship &s) {
+  if (marchAtStart(s))   enterState(s, MARCH_READY);
+  else if (s.io.id == 2) enterState(s, MARCH_HOME_TO_POS2);
+  else enterState(s, (recalledDir(s) == TO_POS1) ? MARCH_HOME_TO_POS1 : MARCH_HOME_TO_POS2);
+}
+
+void marchShipStart(Ship &s) {  // At boot
   shipBegin(s.io);
   s.faultCount = 0;
-  if (bothLimits(s.io))   shipFault(s, F("both limits active at boot — check wiring"));
-  else if (s.io.pos1.active || s.io.pos2.active) enterState(s, MARCH_READY);
-  else enterState(s, (recalledDir(s) == TO_POS1) ? MARCH_HOME_TO_POS1 : MARCH_HOME_TO_POS2);
+  if (bothLimits(s.io)) shipFault(s, F("both limits active at boot — check wiring"));
+  else                  marchShipEnter(s);
+}
+
+LimitSwitch marchButton = { MARCH_BUTTON_PIN, LOW, false, false, 0 };
+
+void buttonBegin() {
+  pinMode(MARCH_BUTTON_PIN, INPUT_PULLUP);
+  marchButton.lastRaw    = (digitalRead(MARCH_BUTTON_PIN) == LOW);
+  marchButton.active     = marchButton.lastRaw;  // Held at boot: needs a release first
+  marchButton.lastChange = millis();
+}
+
+// True once per press (debounced edge).
+bool buttonPressed() {
+  bool was = marchButton.active;
+  limitUpdate(marchButton);
+  return marchButton.active && !was;
+}
+
+// Button: every ship that isn't faulted brakes, then homes. Faulted ships sit the song out.
+void marchButtonStart() {
+  bool any = false;
+  for (uint8_t i = 0; i < 2; i++) {
+    Ship &s = ships[i];
+    if (s.state == FAULT || s.state == LOCKED_OUT) continue;
+    enterState(s, MARCH_BRAKE);
+    any = true;
+  }
+  if (!any) return;
+  marchPhase      = M_BRAKE;
+  marchPhaseStart = millis();
 }
 
 bool marchHoming(const Ship &s) { return s.state == MARCH_HOME_TO_POS1 || s.state == MARCH_HOME_TO_POS2; }
@@ -248,8 +293,16 @@ void marchEnd() {
 }
 
 void updateMarch() {
+  bool pressed = buttonPressed();  // Every loop, so presses during the song are seen and dropped
   switch (marchPhase) {
-    case M_OFF: return;
+    case M_OFF:
+      if (MARCH_ON_BUTTON && pressed) marchButtonStart();
+      return;
+    case M_BRAKE:
+      if (millis() - marchPhaseStart < MARCH_BRAKE_MS) return;
+      for (uint8_t i = 0; i < 2; i++) if (ships[i].state == MARCH_BRAKE) marchShipEnter(ships[i]);
+      marchPhase = M_HOMING;
+      return;
     case M_HOMING:
       if (marchHoming(ships[0]) || marchHoming(ships[1])) return;
       if (ships[0].state != MARCH_READY && ships[1].state != MARCH_READY) { marchEnd(); return; }  // Both faulted
@@ -260,7 +313,7 @@ void updateMarch() {
       if (millis() - marchPhaseStart < MARCH_START_DELAY_MS) return;
       for (uint8_t i = 0; i < 2; i++) {
         Ship &s = ships[i];
-        if (s.state == MARCH_READY) enterState(s, s.io.pos1.active ? MARCH_SING_TO_POS2 : MARCH_SING_TO_POS1);
+        if (s.state == MARCH_READY) enterState(s, (marchSingDir(s) == TO_POS1) ? MARCH_SING_TO_POS1 : MARCH_SING_TO_POS2);
       }
       marchSongStart();
       marchPhase = M_SONG;
@@ -290,18 +343,18 @@ void updateStatusLED() {
 void setup() {
   uint8_t rf = RSTCTRL.RSTFR;  // Why we booted (ATmega4809 RSTCTRL)
   RSTCTRL.RSTFR = rf;          // Write 1s to clear, so the next boot reads only its own cause
-  bool powerUp     = rf & (RSTCTRL_PORF_bm | RSTCTRL_BORF_bm);
-  bool resetButton = (rf & RSTCTRL_EXTRF_bm) && !powerUp;
+  bool powerUp = rf & (RSTCTRL_PORF_bm | RSTCTRL_BORF_bm);
   if (powerUp) dirMem.magic = 0;  // .noinit is random after power-up
 
   #if DEBUG
   Serial.begin(115200);
   Serial.print(F("Space Ships v0.4: Online. Reset flags 0x"));
   Serial.print(rf, HEX);
-  Serial.print(resetButton ? F(" (reset button)\n") : F("\n"));
+  Serial.print(powerUp ? F(" (power-up)\n") : F("\n"));
   #endif
   pinMode(STATUS_LED, OUTPUT);
-  if (MARCH_ON_RESET && resetButton) {
+  buttonBegin();
+  if (MARCH_ON_POWER_UP && powerUp) {
     #if DEBUG
     Serial.print(F("Imperial March\n"));
     #endif
