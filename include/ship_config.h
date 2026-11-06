@@ -65,9 +65,9 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 #define MIN_TOLERANCE       250UL   // Min speed: first step at or above MIN_TARGET - this wins
 #define MIN_STEP_PCT        10      // Min speed: step down by this % of steady each try
 
-/****** Imperial March (bench_test secret key i; live: button and power-up) ******/
-// The reset button can't trigger it: USB connect also resets as "external", and without USB it didn't register.
-#define MARCH_ON_POWER_UP  1      // Live: play at every power-up (not after a watchdog reset, upload or USB connect)
+/****** Imperial March (bench_test secret key i; live: power-up, reset button, A4 button) ******/
+#define MARCH_ON_POWER_UP  1      // Live: play at power-up (not after a watchdog reset or upload)
+#define MARCH_ON_RESET     1      // Live: play after the reset button. USB connect also resets this way: it plays then too.
 #define MARCH_ON_BUTTON    1      // Live: button press plays it whenever the cycle is running (ignored during the song)
 const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same debounce as the limits. Also I2C SDA: no Wire.
 #define MARCH_BRAKE_MS     500UL  // Button: brake this long before homing, so a ship never reverses at speed

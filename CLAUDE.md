@@ -36,7 +36,7 @@
 
 ## Toolchain and commands
 - VS Code + PlatformIO on Ubuntu Linux; repo on GitHub.
-- Envs: `mw_space_two_simple_ships` is the live display firmware (Imperial March at power-up and on the A4 button); `bench_test` is a serial menu to jog ships (hold 5–8, speed set with j, default `JOG_PCT` 40%), watch the limit switches (w), calibrate steady speed (t) and minimum speed (m), shuttle at a typed duty % until stopped (d), set and test the take-off / hyper / cruise profile (a), measure the wrong-way time (c), run continuously with the current values (g), and print the calibration block for `include/ship_config.h` (p).
+- Envs: `mw_space_two_simple_ships` is the live display firmware (Imperial March at power-up, on the reset button, and on the A4 button); `bench_test` is a serial menu to jog ships (hold 5–8, speed set with j, default `JOG_PCT` 40%), watch the limit switches (w), calibrate steady speed (t) and minimum speed (m), shuttle at a typed duty % until stopped (d), set and test the take-off / hyper / cruise profile (a), measure the wrong-way time (c), run continuously with the current values (g), and print the calibration block for `include/ship_config.h` (p).
 - Shared code: `include/ship_motion.h` + `src/ship_motion.cpp`, built into both envs.
 
 ## Code standards

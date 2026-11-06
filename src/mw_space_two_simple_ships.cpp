@@ -15,12 +15,12 @@
  *    4. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
  *    5. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
  *
- *  Imperial March (MARCH_ON_POWER_UP, MARCH_ON_BUTTON on A4): Ship 1 homes the way it was going,
+ *  Imperial March (MARCH_ON_POWER_UP, MARCH_ON_RESET, MARCH_ON_BUTTON on A4): Ship 1 homes the way it was going,
  *  Ship 2 homes to POS2, both sing away from their limit, then the normal cycle carries on.
  *  Same safety checks; fault retries wait for the song; faulted ships sit it out.
  *********************************************/
 
-#if (MARCH_ON_POWER_UP || MARCH_ON_BUTTON) && (MARCH_LIMIT_CLEAR_MS == 0)
+#if (MARCH_ON_POWER_UP || MARCH_ON_RESET || MARCH_ON_BUTTON) && (MARCH_LIMIT_CLEAR_MS == 0)
   #error "MARCH_LIMIT_CLEAR_MS is 0. Measure with bench_test i, or turn the march off."
 #endif
 
@@ -343,18 +343,20 @@ void updateStatusLED() {
 void setup() {
   uint8_t rf = RSTCTRL.RSTFR;  // Why we booted (ATmega4809 RSTCTRL)
   RSTCTRL.RSTFR = rf;          // Write 1s to clear, so the next boot reads only its own cause
-  bool powerUp = rf & (RSTCTRL_PORF_bm | RSTCTRL_BORF_bm);
+  bool powerUp  = rf & (RSTCTRL_PORF_bm | RSTCTRL_BORF_bm);
+  bool resetPin = (rf & RSTCTRL_EXTRF_bm) && !powerUp;  // Reset button or USB connect
+  bool march    = (MARCH_ON_POWER_UP && powerUp) || (MARCH_ON_RESET && resetPin);  // Never after watchdog or upload
   if (powerUp) dirMem.magic = 0;  // .noinit is random after power-up
 
   #if DEBUG
   Serial.begin(115200);
   Serial.print(F("Space Ships v0.4: Online. Reset flags 0x"));
   Serial.print(rf, HEX);
-  Serial.print(powerUp ? F(" (power-up)\n") : F("\n"));
+  Serial.print(powerUp ? F(" (power-up)\n") : resetPin ? F(" (reset pin)\n") : F("\n"));
   #endif
   pinMode(STATUS_LED, OUTPUT);
   buttonBegin();
-  if (MARCH_ON_POWER_UP && powerUp) {
+  if (march) {
     #if DEBUG
     Serial.print(F("Imperial March\n"));
     #endif
