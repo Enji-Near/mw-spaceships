@@ -14,6 +14,9 @@
  *    c    Wrong-way time: from POS1, time motor-on to switch release on the profile, CLEAR_RUNS times.
  *         Retracts at the release duty + CLEAR_RETRACT_ADD_PCT: known to move, still slow.
  *    g    Go: run continuously with the current values (ship_config.h or last test), Enter/0 per ship
+ *    i    (not in the menu) Imperial March: a mid-track ship homes the way it was last going (silent),
+ *         MARCH_START_DELAY_MS, then both drive away from their limit at MARCH_DUTY_PCT while the
+ *         PWM frequency plays the tune once. A ship that reaches a limit brakes; the song goes on.
  *    p    Print the calibration block to paste into include/ship_config.h
  *    s    Stop all;  h  menu
  *  Both ships run together. Enter (or 0 for t and d) skips that ship; m skips ships without steady values.
@@ -25,7 +28,7 @@
 
 /****** Types ******/
 enum Mode    { IDLE, WATCHING, JOGGING, TASK };
-enum Task    { T_STEADY, T_MIN, T_RUN, T_DUTY, T_PROF, T_CLEAR };
+enum Task    { T_STEADY, T_MIN, T_RUN, T_DUTY, T_PROF, T_CLEAR, T_MARCH };
 enum Profile { P_CONST, P_TRIP };
 
 // One ship's progress through a task
@@ -74,6 +77,7 @@ bool motorUsed[2]           = { false, false };
 Dir lastDir[2]              = { TO_POS1, TO_POS1 };
 unsigned long motorOffAt[2] = { 0, 0 };
 uint8_t jogPct = JOG_PCT;
+bool marchPlaying = false;  // Imperial March: song running (tone drive on)
 uint8_t jogShip = 0;
 Dir jogDir = TO_POS1;
 char jogKey = 0;
@@ -98,6 +102,13 @@ void benchDrive(uint8_t i, Dir d, uint8_t duty) {
   motorDrive(shipIO[i], d, duty);
 }
 
+void benchDriveTone(uint8_t i, Dir d, uint8_t duty) {
+  motorOn[i]   = true;
+  motorUsed[i] = true;
+  lastDir[i]   = d;
+  motorDriveTone(shipIO[i], d, duty);
+}
+
 // Failed or aborted test: that ship keeps the values it had before the test.
 void restoreUnfinished() {
   if (mode != TASK) return;
@@ -109,6 +120,8 @@ void restoreUnfinished() {
 void stopAll() {
   benchBrake(0);
   benchBrake(1);
+  toneEnd();  // Brakes above already took the pins off PWM
+  marchPlaying = false;
   rn[0].moving = rn[1].moving = false;
   rn[0].waiting = rn[1].waiting = false;
 }
@@ -526,7 +539,7 @@ void stepDuty(uint8_t i) {
 /****** Accel profile test (a) and wrong-way time (c) ******/
 // While values are being found, a generous limit; the measured one is used by g and live.
 unsigned long clearLimit(uint8_t i) {
-  if (task == T_PROF || task == T_CLEAR) return CLEAR_CAL_MAX_MS;
+  if (task == T_PROF || task == T_CLEAR || task == T_MARCH) return CLEAR_CAL_MAX_MS;  // March: low PWM frequency changes speed
   if (rn[i].profile == P_TRIP) return clearMs(tune[i]);
   return LIMIT_CLEAR_TIME;
 }
@@ -633,6 +646,8 @@ void stepClear(uint8_t i) {
   }
 }
 
+void stepMarch(uint8_t i);  // Imperial March section, below
+
 void stepTask(uint8_t i) {
   switch (task) {
     case T_STEADY: stepSteady(i); break;
@@ -641,6 +656,7 @@ void stepTask(uint8_t i) {
     case T_DUTY:   stepDuty(i); break;
     case T_PROF:   stepProf(i); break;
     case T_CLEAR:  stepClear(i); break;
+    case T_MARCH:  stepMarch(i); break;
   }
 }
 
@@ -683,7 +699,8 @@ void updateRunner(uint8_t i) {
     endMove(i, e, false);
   } else {
     if (r.boostAfter && !r.boosted && e >= r.boostAfter) r.boosted = true;
-    benchDrive(i, r.dir, currentDuty(i, e));
+    if (task == T_MARCH && marchPlaying) benchDriveTone(i, r.dir, currentDuty(i, e));
+    else                 benchDrive(i, r.dir, currentDuty(i, e));
   }
 }
 
@@ -726,7 +743,7 @@ void taskFinished() {
   if (anyFail) {
     Serial.print(F("\nCalibration failed for a ship, see above. Values for that ship unchanged.\n"));
   }
-  printBlock();
+  if (task != T_MARCH) printBlock();
   if (!anyFail && task == T_STEADY) {
     startRun(rn[0].active, rn[1].active);
   } else {
@@ -896,6 +913,100 @@ void cmdClear() {
   kickTask();
 }
 
+/****** Imperial March (i) ******/
+unsigned long marchStart = 0;
+bool marchArmed = false;            // Both ships home, start delay running
+unsigned long marchArmedAt = 0;
+
+// Mid-track: carry on the way it was last going. Never driven since boot: POS1, same as live.
+Dir marchHomeDir(uint8_t i) { return motorUsed[i] ? lastDir[i] : TO_POS1; }
+
+// Home (silent, profile speed), then wait for the other ship: both start with the first note.
+void stepMarch(uint8_t i) {
+  Runner &r = rn[i];
+  switch (r.step) {
+    case 0:
+      r.step = 1;
+      if (!atALimit(i)) {
+        Dir d = marchHomeDir(i);
+        printShip(i);
+        Serial.print(F("homing "));
+        printDir(d);
+        Serial.print(F(" (silent)\n"));
+        startMove(i, d, P_TRIP, 0);
+        return;
+      }
+      [[fallthrough]];
+    case 1:
+      r.step = 2;  // Ready: updateMarch starts the song when both are
+      return;
+    case 3: {      // Song move ended on a limit
+      printShip(i);
+      Serial.print(F("reached a limit at "));
+      Serial.print(r.lastMs);
+      Serial.print(F(" ms into the song, braked\n"));
+      shipDone(i, true);
+      return;
+    }
+  }
+}
+
+bool marchReady(uint8_t i) { return !rn[i].active || rn[i].done || (rn[i].step == 2 && !rn[i].moving); }
+
+void finishMarch() {
+  unsigned long t = millis() - marchStart;
+  for (uint8_t i = 0; i < 2; i++) {
+    if (!rn[i].active || rn[i].done) continue;
+    benchBrake(i);  // Not endMove: that would run the "reached a limit" step
+    rn[i].moving = false;
+    printShip(i);
+    Serial.print(F("sang the whole song, "));
+    Serial.print(t);
+    Serial.print(F(" ms, no limit hit\n"));
+    shipDone(i, true);
+  }
+  Serial.print(F("Song complete\n"));
+  marchPlaying = false;
+}
+
+void updateMarch() {
+  if (!marchPlaying) {
+    if (!marchReady(0) || !marchReady(1)) return;
+    if (!marchArmed) {
+      marchArmed   = true;
+      marchArmedAt = millis();
+      Serial.print(F("Both home. Song starts in "));
+      Serial.print(MARCH_START_DELAY_MS);
+      Serial.print(F(" ms\n"));
+      return;
+    }
+    if (millis() - marchArmedAt < MARCH_START_DELAY_MS) return;
+    for (uint8_t i = 0; i < 2; i++) {
+      if (!rn[i].active || rn[i].done) continue;
+      printShip(i);
+      Serial.print(F("singing "));
+      printDir(awayFromLimit(i));
+      Serial.print(F("\n"));
+      startMove(i, awayFromLimit(i), P_CONST, pctToDuty(MARCH_DUTY_PCT));
+      rn[i].step = 3;
+    }
+    marchStart   = millis();
+    marchPlaying = true;
+    marchSongStart();
+    return;
+  }
+  if (!marchSongUpdate()) finishMarch();
+}
+
+void cmdMarch() {
+  startTask(T_MARCH, true, true);
+  if (mode != TASK) return;
+  marchPlaying = false;
+  marchArmed   = false;
+  Serial.print(F("Imperial March: both ships, one way each, song plays once. Any key stops.\n"));
+  kickTask();
+}
+
 /****** Limit Watch ******/
 const uint8_t WATCH_PINS[4]   = { SHIP1_LIMIT_POS1, SHIP1_LIMIT_POS2, SHIP2_LIMIT_POS1, SHIP2_LIMIT_POS2 };
 const uint8_t WATCH_ACTIVE[4] = { SHIP1_POS1_ACTIVE, SHIP1_POS2_ACTIVE, SHIP2_POS1_ACTIVE, SHIP2_POS2_ACTIVE };
@@ -1019,6 +1130,7 @@ void handleIdleKey(char c) {
     case 'g': cmdGo(); break;
     case 'a': cmdProfile(); break;
     case 'c': cmdClear(); break;
+    case 'i': cmdMarch(); break;  // Secret: not in the menu
     case 'p': printBlock(); Serial.print(F("> ")); break;
     case 's': stopAll(); Serial.print(F("All stopped\n> ")); break;
     case 'h':
@@ -1049,7 +1161,7 @@ void handleSerial() {
   } else if (mode == TASK) {
     Serial.print(F("\nStopped by key\n"));
     restoreUnfinished();
-    if (task != T_DUTY) printBlock();  // Duty test changes no calibration values
+    if (task != T_DUTY && task != T_MARCH) printBlock();  // These change no calibration values
     toIdle();
   } else if (!isLatched(c)) {
     handleIdleKey(c);
@@ -1084,6 +1196,7 @@ void loop() {
     case JOGGING:  updateJog(); break;
     case WATCHING: updateWatch(); break;
     case TASK:
+      if (task == T_MARCH) updateMarch();
       updateRunner(0);
       updateRunner(1);
       if (mode == TASK && rn[0].done && rn[1].done) taskFinished();

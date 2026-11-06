@@ -65,6 +65,15 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 #define MIN_TOLERANCE       250UL   // Min speed: first step at or above MIN_TARGET - this wins
 #define MIN_STEP_PCT        10      // Min speed: step down by this % of steady each try
 
+/****** Imperial March (bench_test secret key i; live: reset button) ******/
+#define MARCH_ON_RESET     1      // Live: 1 = reset button plays the march, then the normal cycle. Power-up never does.
+#define MARCH_DUTY_PCT     50     // Fixed duty while singing: 50% PWM is the loudest note, half of hyper speed
+#define MARCH_OCTAVE_DOWN  1      // 0 = as written, 1 = one octave lower. Lower = more current ripple = louder
+                                  // (ripple ~ 1/f, unverified on these motors). Check motor temperature after.
+#define MARCH_START_DELAY_MS 0UL     // After homing, before the first note. 0: homing time is the lead-in
+#define MARCH_TEMPO_PCT    100    // Note lengths in %, 100 = as written (~26 s)
+#define MARCH_NOTE_GAP_MS  40UL   // Silence at the end of each note, so repeated notes are heard
+
 /****** Motion modes ******/
 #define MODE_STEADY  0  // Constant duty, full trip
 #define MODE_SURGE   1  // S-curves START -> TAKE_OFF -> HYPER, hold HYPER, S-curve -> CRUISE, then CRUISE to the limit

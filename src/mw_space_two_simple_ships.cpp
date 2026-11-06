@@ -14,6 +14,10 @@
  *    3. Both-limits check — mechanically impossible → wiring fault
  *    4. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
  *    5. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
+ *
+ *  Reset button (MARCH_ON_RESET): boot reads the reset cause. External reset only (not power-up,
+ *  watchdog or upload) → Imperial March: each ship homes the way it was last going, both sing away
+ *  from their limit, then the normal cycle carries on. Same safety checks; fault retries wait for the song.
  *********************************************/
 
 // Surge needs a measured wrong-way time, or every trip faults: fail the build, not the display.
@@ -31,8 +35,23 @@ enum ShipState {
   MOVING_TO_POS2,
   DWELL_AT_POS2,
   FAULT,        // Braked, waiting FAULT_RETRY_TIME, then retry
-  LOCKED_OUT    // Braked until power cycle
+  LOCKED_OUT,   // Braked until power cycle
+  MARCH_HOME_TO_POS1,  // Reset-button march: profile speed to a limit
+  MARCH_HOME_TO_POS2,
+  MARCH_READY,         // At a limit, braked, waiting for the song
+  MARCH_SING_TO_POS1,  // MARCH_DUTY_PCT, tone PWM
+  MARCH_SING_TO_POS2,
+  MARCH_DONE           // Reached a limit during the song, braked until it ends
 };
+
+enum MarchPhase { M_OFF, M_HOMING, M_DELAY, M_SONG };
+MarchPhase marchPhase = M_OFF;
+unsigned long marchPhaseStart = 0;
+
+// Direction of travel, kept through a reset (not power-up): .noinit is not cleared at startup.
+struct DirMemory { uint8_t magic; uint8_t dir[2]; };
+DirMemory dirMem __attribute__((section(".noinit")));
+#define DIR_MAGIC  0x5A
 
 struct Ship {
   ShipIO &io;
@@ -60,20 +79,45 @@ void debugState(const Ship &s) {
     case DWELL_AT_POS2:  Serial.print(F(": at position 2, dwelling\n")); break;
     case FAULT:          Serial.print(F(": FAULT — retry after cool-down\n")); break;
     case LOCKED_OUT:     Serial.print(F(": LOCKED OUT — power cycle to clear\n")); break;
+    case MARCH_HOME_TO_POS1: Serial.print(F(": march, homing to position 1\n")); break;
+    case MARCH_HOME_TO_POS2: Serial.print(F(": march, homing to position 2\n")); break;
+    case MARCH_READY:        Serial.print(F(": march, ready\n")); break;
+    case MARCH_SING_TO_POS1: Serial.print(F(": march, singing to position 1\n")); break;
+    case MARCH_SING_TO_POS2: Serial.print(F(": march, singing to position 2\n")); break;
+    case MARCH_DONE:         Serial.print(F(": march, reached a limit, waiting for the song to end\n")); break;
   }
   #endif
 }
 
 /****** State Machine ******/
-Dir moveDir(ShipState st) { return (st == MOVING_TO_POS1) ? TO_POS1 : TO_POS2; }
+bool isMove(ShipState st) {
+  return st == MOVING_TO_POS1 || st == MOVING_TO_POS2 || st == MARCH_HOME_TO_POS1 || st == MARCH_HOME_TO_POS2;
+}
+bool isSing(ShipState st) { return st == MARCH_SING_TO_POS1 || st == MARCH_SING_TO_POS2; }
+Dir moveDir(ShipState st) {
+  return (st == MOVING_TO_POS1 || st == MARCH_HOME_TO_POS1 || st == MARCH_SING_TO_POS1) ? TO_POS1 : TO_POS2;
+}
+
+void rememberDir(const Ship &s, Dir d) {
+  dirMem.dir[s.io.id - 1] = d;
+  dirMem.magic = DIR_MAGIC;
+}
+
+Dir recalledDir(const Ship &s) {
+  uint8_t d = dirMem.dir[s.io.id - 1];
+  return (dirMem.magic == DIR_MAGIC && d <= TO_POS2) ? (Dir)d : TO_POS1;  // Unknown: POS1, as at power-up
+}
 
 // Single entry point for every state change, so outputs and state stay in sync.
 void enterState(Ship &s, ShipState next) {
   s.state      = next;
   s.stateStart = millis();
-  if (next == MOVING_TO_POS1 || next == MOVING_TO_POS2) {
-    s.lastMove = next;
-    motorDrive(s.io, moveDir(next), tripDuty(s.tune, 0));
+  if (isMove(next) || isSing(next)) {
+    Dir d = moveDir(next);
+    s.lastMove = (d == TO_POS1) ? MOVING_TO_POS1 : MOVING_TO_POS2;
+    rememberDir(s, d);
+    if (isSing(next)) motorDriveTone(s.io, d, PCT_TO_DUTY(MARCH_DUTY_PCT));
+    else              motorDrive(s.io, d, tripDuty(s.tune, 0));
   } else {
     motorBrake(s.io);  // Dwell, fault, lockout
   }
@@ -119,6 +163,23 @@ void updateMove(Ship &s, ShipState arrivedState) {
   }
 }
 
+// Song move: fixed duty with tone. Wrong-way time at least LIMIT_CLEAR_TIME: tone PWM changes speed.
+void updateSing(Ship &s) {
+  Dir d = moveDir(s.state);
+  unsigned long elapsed = millis() - s.stateStart;
+  unsigned long clear = clearMs(s.tune);
+  if (clear < LIMIT_CLEAR_TIME) clear = LIMIT_CLEAR_TIME;
+
+  if (aheadOf(s.io, d).active) {
+    s.faultCount = 0;
+    enterState(s, MARCH_DONE);
+  } else if (behindOf(s.io, d).active && elapsed >= clear) {
+    shipFault(s, F("limit behind ship still active during the march"));
+  } else {
+    motorDriveTone(s.io, d, PCT_TO_DUTY(MARCH_DUTY_PCT));
+  }
+}
+
 void updateShip(Ship &s) {
   shipUpdateLimits(s.io);
 
@@ -134,8 +195,14 @@ void updateShip(Ship &s) {
     case MOVING_TO_POS2: updateMove(s, DWELL_AT_POS2); break;
     case DWELL_AT_POS1:  if (elapsed >= DWELL_TIME) enterState(s, MOVING_TO_POS2); break;
     case DWELL_AT_POS2:  if (elapsed >= DWELL_TIME) enterState(s, MOVING_TO_POS1); break;
-    case FAULT:          if (elapsed >= FAULT_RETRY_TIME) shipRecover(s); break;
+    case FAULT:          if (elapsed >= FAULT_RETRY_TIME && marchPhase == M_OFF) shipRecover(s); break;  // Not over the song's PWM
     case LOCKED_OUT:     break;
+    case MARCH_HOME_TO_POS1:
+    case MARCH_HOME_TO_POS2: updateMove(s, MARCH_READY); break;
+    case MARCH_SING_TO_POS1:
+    case MARCH_SING_TO_POS2: updateSing(s); break;
+    case MARCH_READY:
+    case MARCH_DONE:         break;
   }
 }
 
@@ -149,6 +216,60 @@ void shipStart(Ship &s) {
   else if (s.io.pos1.active) enterState(s, DWELL_AT_POS1);
   else if (s.io.pos2.active) enterState(s, DWELL_AT_POS2);
   else                       enterState(s, MOVING_TO_POS1);  // Mid-track: home to POS1
+}
+
+/****** Imperial March (reset button) ******/
+void marchShipStart(Ship &s) {
+  shipBegin(s.io);
+  s.faultCount = 0;
+  if (bothLimits(s.io))   shipFault(s, F("both limits active at boot — check wiring"));
+  else if (s.io.pos1.active || s.io.pos2.active) enterState(s, MARCH_READY);
+  else enterState(s, (recalledDir(s) == TO_POS1) ? MARCH_HOME_TO_POS1 : MARCH_HOME_TO_POS2);
+}
+
+bool marchHoming(const Ship &s) { return s.state == MARCH_HOME_TO_POS1 || s.state == MARCH_HOME_TO_POS2; }
+
+// Song over: tone off, then each ship back into the normal cycle.
+void marchEnd() {
+  for (uint8_t i = 0; i < 2; i++) if (isSing(ships[i].state)) motorBrake(ships[i].io);
+  toneEnd();
+  marchPhase = M_OFF;
+  for (uint8_t i = 0; i < 2; i++) {
+    Ship &s = ships[i];
+    if (isSing(s.state)) {
+      enterState(s, (moveDir(s.state) == TO_POS1) ? MOVING_TO_POS1 : MOVING_TO_POS2);  // Carry on to that end
+    } else if (s.state == MARCH_DONE || s.state == MARCH_READY) {
+      enterState(s, s.io.pos1.active ? DWELL_AT_POS1 : DWELL_AT_POS2);
+    }
+  }
+  #if DEBUG
+  Serial.print(F("March over, normal cycle\n"));
+  #endif
+}
+
+void updateMarch() {
+  switch (marchPhase) {
+    case M_OFF: return;
+    case M_HOMING:
+      if (marchHoming(ships[0]) || marchHoming(ships[1])) return;
+      if (ships[0].state != MARCH_READY && ships[1].state != MARCH_READY) { marchEnd(); return; }  // Both faulted
+      marchPhase      = M_DELAY;
+      marchPhaseStart = millis();
+      return;
+    case M_DELAY:
+      if (millis() - marchPhaseStart < MARCH_START_DELAY_MS) return;
+      for (uint8_t i = 0; i < 2; i++) {
+        Ship &s = ships[i];
+        if (s.state == MARCH_READY) enterState(s, s.io.pos1.active ? MARCH_SING_TO_POS2 : MARCH_SING_TO_POS1);
+      }
+      marchSongStart();
+      marchPhase = M_SONG;
+      return;
+    case M_SONG:
+      if (marchSongUpdate() && (isSing(ships[0].state) || isSing(ships[1].state))) return;
+      marchEnd();
+      return;
+  }
 }
 
 /****** Status LED ******/
@@ -167,13 +288,30 @@ void updateStatusLED() {
 
 /****** Setup ******/
 void setup() {
+  uint8_t rf = RSTCTRL.RSTFR;  // Why we booted (ATmega4809 RSTCTRL)
+  RSTCTRL.RSTFR = rf;          // Write 1s to clear, so the next boot reads only its own cause
+  bool powerUp     = rf & (RSTCTRL_PORF_bm | RSTCTRL_BORF_bm);
+  bool resetButton = (rf & RSTCTRL_EXTRF_bm) && !powerUp;
+  if (powerUp) dirMem.magic = 0;  // .noinit is random after power-up
+
   #if DEBUG
   Serial.begin(115200);
-  Serial.print(F("Space Ships v0.4: Online\n"));
+  Serial.print(F("Space Ships v0.4: Online. Reset flags 0x"));
+  Serial.print(rf, HEX);
+  Serial.print(resetButton ? F(" (reset button)\n") : F("\n"));
   #endif
   pinMode(STATUS_LED, OUTPUT);
-  shipStart(ships[0]);
-  shipStart(ships[1]);
+  if (MARCH_ON_RESET && resetButton) {
+    #if DEBUG
+    Serial.print(F("Imperial March\n"));
+    #endif
+    marchShipStart(ships[0]);
+    marchShipStart(ships[1]);
+    marchPhase = M_HOMING;
+  } else {
+    shipStart(ships[0]);
+    shipStart(ships[1]);
+  }
   wdt_enable(WDT_TIMEOUT);  // Last, after setup. Loop is non-blocking.
 }
 
@@ -182,5 +320,6 @@ void loop() {
   wdt_reset();
   updateShip(ships[0]);
   updateShip(ships[1]);
+  updateMarch();
   updateStatusLED();
 }

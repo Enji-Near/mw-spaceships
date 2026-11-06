@@ -67,3 +67,10 @@ void motorDrive(ShipIO &s, Dir d, uint8_t duty);  // duty 0 = brake, 255 = full
 // Speed profile, elapsed = ms since the trip started
 uint8_t tripDuty(const ShipTuning &t, unsigned long elapsed);   // Per t.mode
 unsigned long clearMs(const ShipTuning &t);  // Wrong-way check time for this ship's mode
+
+// Tone mode (bench Imperial March): the TCA0 PWM frequency is the note. D5, D9, D10 share it.
+void toneSetHz(uint16_t hz);                          // 0 = silent (normal PWM frequency)
+void motorDriveTone(ShipIO &s, Dir d, uint8_t duty);  // As motorDrive, PWM on a TCA0 pin so it sings
+void toneEnd();                                       // Back to normal PWM. Brake the motors first.
+void marchSongStart();                                // Imperial March, first note
+bool marchSongUpdate();                               // Call every loop. False once the song has ended.

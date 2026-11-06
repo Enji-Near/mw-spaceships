@@ -121,6 +121,144 @@ void motorDrive(ShipIO &s, Dir d, uint8_t duty) {
   }
 }
 
+/****** Tone mode ******/
+// TCA0 single-slope: output HIGH (= brake) while CNT < CMP. Normal PER is 255 (core PWM_TIMER_PERIOD),
+// so analogWrite writes 0-255 straight into CMP. In tone mode PER sets the pitch and CMP is rescaled.
+#define TCA_HZ  (F_CPU / PWM_TCA_DIV)
+static uint16_t tcaPer = 255;
+static uint8_t tcaHigh[3] = { 0, 0, 0 };  // Per TCA0 channel: HIGH share 0-255
+
+static void tcaWriteCmp(uint8_t ch) {
+  volatile uint16_t *cmp = &TCA0.SINGLE.CMP0BUF + ch;  // CMP0BUF..CMP2BUF are consecutive (core does the same)
+  *cmp = (uint16_t)((uint32_t)tcaHigh[ch] * (tcaPer + 1UL) / 256);
+}
+
+void toneSetHz(uint16_t hz) {
+  uint32_t per = 255;
+  if (hz > 0) {
+    per = TCA_HZ / hz - 1;
+    if (per > 0xFFFF) per = 0xFFFF;  // Lowest note TCA_HZ / 65536 (~122 Hz at /2)
+    if (per < 255) per = 255;        // Never above the normal PWM frequency
+  }
+  uint8_t sreg = SREG;
+  cli();  // 16-bit buffer writes
+  tcaPer = (uint16_t)per;
+  TCA0.SINGLE.PERBUF = tcaPer;      // Buffered: PER and CMP change together at the next overflow
+  for (uint8_t ch = 0; ch < 3; ch++) tcaWriteCmp(ch);
+  SREG = sreg;
+}
+
+static void tcaPwm(uint8_t pin, uint8_t high) {
+  uint8_t ch = digitalPinToBitPosition(pin);  // TCA0 WOn is PORTB bit n (core variant)
+  tcaHigh[ch] = high;
+  uint8_t sreg = SREG;
+  cli();
+  tcaWriteCmp(ch);
+  SREG = sreg;
+  TCA0.SINGLE.CTRLB |= (1 << (TCA_SINGLE_CMP0EN_bp + ch));
+}
+
+// Drive/brake when the other pin is on TCA0 (same as motorDrive). If only the target pin is
+// (Ship 2 toward POS2: other pin is D3 on TCB1), drive/coast instead: PWM the target pin, other LOW.
+// Coast > ~1 ms puts the DRV8871 to sleep; it wakes 50 us after an input goes high (TI SLVSCY9B §7.3.2).
+void motorDriveTone(ShipIO &s, Dir d, uint8_t duty) {
+  uint8_t target = (d == TO_POS1) ? s.inToPos1 : s.inToPos2;
+  uint8_t other  = (d == TO_POS1) ? s.inToPos2 : s.inToPos1;
+  if (duty == 0 || duty == 255) {
+    motorDrive(s, d, duty);
+  } else if (digitalPinToTimer(other) == TIMERA0) {
+    digitalWrite(target, HIGH);
+    tcaPwm(other, 255 - duty);   // HIGH = brake
+  } else if (digitalPinToTimer(target) == TIMERA0) {
+    digitalWrite(other, LOW);    // Also stops D3's TCB PWM
+    tcaPwm(target, duty);        // HIGH = drive, LOW = coast
+  } else {
+    motorDrive(s, d, duty);      // No TCA0 pin: silent
+  }
+  s.lastCmd = -1;  // So the next motorDrive rewrites both pins
+}
+
+void toneEnd() {
+  for (uint8_t ch = 0; ch < 3; ch++) tcaHigh[ch] = 0;
+  toneSetHz(0);
+}
+
+/****** Imperial March song (tone mode) ******/
+// Common arrangement, A minor. hz 0 = rest. Lengths in ms at MARCH_TEMPO_PCT 100.
+struct Note { uint16_t hz; uint16_t ms; };
+#define N_F4   349
+#define N_GS4  415
+#define N_A4   440
+#define N_AS4  466
+#define N_B4   494
+#define N_C5   523
+#define N_CS5  554
+#define N_D5   587
+#define N_DS5  622
+#define N_E5   659
+#define N_F5   698
+#define N_FS5  740
+#define N_G5   784
+#define N_GS5  831
+#define N_A5   880
+const Note MARCH[] PROGMEM = {
+  // Theme, twice
+  { N_A4, 500 }, { N_A4, 500 }, { N_A4, 500 }, { N_F4, 350 }, { N_C5, 150 },
+  { N_A4, 500 }, { N_F4, 350 }, { N_C5, 150 }, { N_A4, 650 }, { 0, 500 },
+  { N_E5, 500 }, { N_E5, 500 }, { N_E5, 500 }, { N_F5, 350 }, { N_C5, 150 },
+  { N_GS4, 500 }, { N_F4, 350 }, { N_C5, 150 }, { N_A4, 650 }, { 0, 500 },
+  // Second section
+  { N_A5, 500 }, { N_A4, 300 }, { N_A4, 150 }, { N_A5, 500 }, { N_GS5, 325 }, { N_G5, 175 },
+  { N_FS5, 125 }, { N_F5, 125 }, { N_FS5, 250 }, { 0, 325 },
+  { N_AS4, 250 }, { N_DS5, 500 }, { N_D5, 325 }, { N_CS5, 175 }, { N_C5, 125 }, { N_B4, 125 },
+  { N_C5, 250 }, { 0, 350 },
+  // Variant 1
+  { N_F4, 250 }, { N_GS4, 500 }, { N_F4, 350 }, { N_A4, 125 }, { N_C5, 500 }, { N_A4, 375 },
+  { N_C5, 125 }, { N_E5, 650 }, { 0, 500 },
+  // Second section again
+  { N_A5, 500 }, { N_A4, 300 }, { N_A4, 150 }, { N_A5, 500 }, { N_GS5, 325 }, { N_G5, 175 },
+  { N_FS5, 125 }, { N_F5, 125 }, { N_FS5, 250 }, { 0, 325 },
+  { N_AS4, 250 }, { N_DS5, 500 }, { N_D5, 325 }, { N_CS5, 175 }, { N_C5, 125 }, { N_B4, 125 },
+  { N_C5, 250 }, { 0, 350 },
+  // Variant 2, ending
+  { N_F4, 250 }, { N_GS4, 500 }, { N_F4, 375 }, { N_C5, 125 }, { N_A4, 500 }, { N_F4, 375 },
+  { N_C5, 125 }, { N_A4, 650 }
+};
+const uint8_t MARCH_LEN = sizeof(MARCH) / sizeof(MARCH[0]);
+static uint8_t marchIdx = 0;
+static unsigned long marchNoteStart = 0;
+static bool marchGap = false;
+
+static uint16_t marchHz(uint8_t k)      { return pgm_read_word(&MARCH[k].hz) >> MARCH_OCTAVE_DOWN; }
+static unsigned long marchMs(uint8_t k) { return (unsigned long)pgm_read_word(&MARCH[k].ms) * MARCH_TEMPO_PCT / 100; }
+
+static void startNote(uint8_t k) {
+  marchIdx       = k;
+  marchNoteStart = millis();
+  marchGap       = false;
+  toneSetHz(marchHz(k));
+}
+
+void marchSongStart() { startNote(0); }
+
+// Advances notes. Returns false once the last note has ended (tone off).
+bool marchSongUpdate() {
+  unsigned long e = millis() - marchNoteStart;
+  unsigned long len = marchMs(marchIdx);
+  if (e >= len) {
+    if (marchIdx + 1 >= MARCH_LEN) {
+      toneSetHz(0);
+      return false;
+    }
+    startNote(marchIdx + 1);
+  } else if (!marchGap && e + MARCH_NOTE_GAP_MS >= len) {
+    toneSetHz(0);
+    marchGap = true;
+  }
+  return true;
+}
+
+
 /****** Speed profile ******/
 // Smoothstep: 0→1 with zero slope at both ends, so the stages join without jerk.
 static float sCurve(float x) { return x * x * (3.0f - 2.0f * x); }
