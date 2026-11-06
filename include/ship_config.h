@@ -7,7 +7,7 @@
  **********************************************/
 
 /****** Debug ******/
-#define DEBUG  1  // Live firmware serial output: 1 = on (115200 baud), 0 = deployment
+#define DEBUG  0  // Live firmware serial output: 1 = on (115200 baud), 0 = deployment
 
 /****** Driver pins (DRV8871 IN1/IN2, all PWM-capable) ******/
 // Direction unverified until bench test: if a ship runs the wrong way, swap that ship's two values.
