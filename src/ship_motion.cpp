@@ -12,9 +12,11 @@ ShipIO shipIO[2] = {
 
 const ShipTuning SHIP_TUNING[2] = {
   { SHIP1_MODE, SHIP1_STEADY_DUTY, SHIP1_STEADY_TRIP_MS, SHIP1_MIN_DUTY, SHIP1_MIN_TRIP_MS,
-    SHIP1_ACCEL_PCT, SHIP1_DECEL_PCT, SHIP1_DECEL_START_MS },
+    SHIP1_START_SPEED, SHIP1_RAMP_TO_TAKE_OFF_MS, SHIP1_TAKE_OFF_SPEED, SHIP1_ACCEL_TO_HYPER_SPEED_MS, SHIP1_HYPER_SPEED,
+    SHIP1_TIME_AT_HYPER_SPEED_MS, SHIP1_DECEL_TO_CRUISE_MS, SHIP1_CRUISE_SPEED, SHIP1_LIMIT_CLEAR_MS },
   { SHIP2_MODE, SHIP2_STEADY_DUTY, SHIP2_STEADY_TRIP_MS, SHIP2_MIN_DUTY, SHIP2_MIN_TRIP_MS,
-    SHIP2_ACCEL_PCT, SHIP2_DECEL_PCT, SHIP2_DECEL_START_MS }
+    SHIP2_START_SPEED, SHIP2_RAMP_TO_TAKE_OFF_MS, SHIP2_TAKE_OFF_SPEED, SHIP2_ACCEL_TO_HYPER_SPEED_MS, SHIP2_HYPER_SPEED,
+    SHIP2_TIME_AT_HYPER_SPEED_MS, SHIP2_DECEL_TO_CRUISE_MS, SHIP2_CRUISE_SPEED, SHIP2_LIMIT_CLEAR_MS }
 };
 
 /****** Limits ******/
@@ -52,7 +54,46 @@ void motorBrake(ShipIO &s) {
   s.lastCmd = -1;
 }
 
+/****** PWM frequency ******/
+#if   PWM_TCA_DIV == 1
+  #define TCA_CLKSEL  TCA_SINGLE_CLKSEL_DIV1_gc
+#elif PWM_TCA_DIV == 2
+  #define TCA_CLKSEL  TCA_SINGLE_CLKSEL_DIV2_gc
+#elif PWM_TCA_DIV == 4
+  #define TCA_CLKSEL  TCA_SINGLE_CLKSEL_DIV4_gc
+#elif PWM_TCA_DIV == 8
+  #define TCA_CLKSEL  TCA_SINGLE_CLKSEL_DIV8_gc
+#elif PWM_TCA_DIV == 16
+  #define TCA_CLKSEL  TCA_SINGLE_CLKSEL_DIV16_gc
+#elif PWM_TCA_DIV != 64
+  #error "PWM_TCA_DIV must be 1, 2, 4, 8, 16 or 64"
+#endif
+
+// Core default: TCA0 at F_CPU/64 clocks the PWM on D5/D9/D10 (TCA0) and D3 (TCB1, CLKTCA),
+// and also the millis() timer TCB3 (8-bit, 256 ticks = 1.024 ms) (core variant.c, wiring.c).
+// Speeding up TCA0 would speed up millis(), so TCB3 moves to 16-bit periodic mode with a
+// period scaled by the same factor: it still interrupts every 1.024 ms and millis() stays exact.
+// micros() and delay() read TCB3's low byte and become wrong; neither is used in this project.
+static void pwmBegin() {
+#if PWM_TCA_DIV != 64
+  uint8_t sreg = SREG;
+  cli();
+  TCB3.CTRLA &= ~TCB_ENABLE_bm;
+  TCB3.CTRLB  = TCB_CNTMODE_INT_gc;
+  TCB3.CCMP   = 256U * (64 / PWM_TCA_DIV) - 1;
+  TCB3.CNT    = 0;
+  TCA0.SINGLE.CTRLA = TCA_CLKSEL | TCA_SINGLE_ENABLE_bm;
+  TCB3.CTRLA |= TCB_ENABLE_bm;
+  SREG = sreg;
+#endif
+}
+
 void shipBegin(ShipIO &s) {
+  static bool pwmReady = false;  // Timers are shared by both ships: set once
+  if (!pwmReady) {
+    pwmBegin();
+    pwmReady = true;
+  }
   // Driver first: pinMode(OUTPUT) gives LOW/LOW = coast, then brake straight away.
   pinMode(s.inToPos1, OUTPUT);
   pinMode(s.inToPos2, OUTPUT);
@@ -81,37 +122,35 @@ void motorDrive(ShipIO &s, Dir d, uint8_t duty) {
 }
 
 /****** Speed profile ******/
-// Smoothstep: 0→1 with zero slope at both ends, so accel and decel have no jerk at the joins.
+// Smoothstep: 0→1 with zero slope at both ends, so the stages join without jerk.
 static float sCurve(float x) { return x * x * (3.0f - 2.0f * x); }
 
-static uint8_t blendDuty(const ShipTuning &t, float f) {
-  return t.minDuty + (uint8_t)((t.steadyDuty - t.minDuty) * f + 0.5f);
+// a -> b along the S-curve, f = 0..1
+static uint8_t sBlend(uint8_t a, uint8_t b, float f) {
+  return (uint8_t)(a + (b - a) * sCurve(f) + 0.5f);
 }
 
-unsigned long accelMs(const ShipTuning &t) { return t.steadyTripMs * t.accelPct / 100; }
-unsigned long decelMs(const ShipTuning &t) { return t.steadyTripMs * t.decelPct / 100; }
-
-static float upFrac(const ShipTuning &t, unsigned long e) {
-  unsigned long a = accelMs(t);
-  if (a == 0 || e >= a) return 1.0f;
-  return sCurve((float)e / a);
+// Start -> take-off, take-off -> hyper, hold hyper, hyper -> cruise, then cruise to the limit. No decel at the end.
+static uint8_t surgeDuty(const ShipTuning &t, unsigned long e) {
+  uint8_t start = PCT_TO_DUTY(t.startPct), takeOff = PCT_TO_DUTY(t.takeOffPct);
+  uint8_t hyper = PCT_TO_DUTY(t.hyperPct), cruise = PCT_TO_DUTY(t.cruisePct);
+  if (e < t.takeOffRampMs) return sBlend(start, takeOff, (float)e / t.takeOffRampMs);
+  e -= t.takeOffRampMs;
+  if (e < t.hyperRampMs) return sBlend(takeOff, hyper, (float)e / t.hyperRampMs);
+  e -= t.hyperRampMs;
+  if (e < t.hyperHoldMs) return hyper;
+  e -= t.hyperHoldMs;
+  if (e < t.cruiseRampMs) return sBlend(hyper, cruise, (float)e / t.cruiseRampMs);
+  return cruise;
 }
 
-static float downFrac(const ShipTuning &t, unsigned long e) {
-  unsigned long ds = t.decelStartMs;
-  unsigned long dm = decelMs(t);
-  if (e <= ds) return 1.0f;
-  if (dm == 0 || e >= ds + dm) return 0.0f;  // Decel done: creep at minDuty until the limit
-  return 1.0f - sCurve((float)(e - ds) / dm);
-}
-
-uint8_t accelDuty(const ShipTuning &t, unsigned long elapsed) {
-  return blendDuty(t, upFrac(t, elapsed));
+// MODE_SURGE starts slow, so it needs its measured time; unmeasured falls back and faults loudly.
+unsigned long clearMs(const ShipTuning &t) {
+  if (t.mode == MODE_SURGE && t.limitClearMs > 0) return t.limitClearMs;
+  return LIMIT_CLEAR_TIME;
 }
 
 uint8_t tripDuty(const ShipTuning &t, unsigned long elapsed) {
-  if (t.mode != MODE_RAMP) return t.steadyDuty;
-  float up   = upFrac(t, elapsed);
-  float down = downFrac(t, elapsed);
-  return blendDuty(t, (up < down) ? up : down);  // Lower wins, so a short trip still decelerates
+  if (t.mode == MODE_SURGE) return surgeDuty(t, elapsed);
+  return t.steadyDuty;
 }

@@ -28,9 +28,16 @@ struct ShipTuning {
   unsigned long steadyTripMs;
   uint8_t minDuty;
   unsigned long minTripMs;
-  uint8_t accelPct;
-  uint8_t decelPct;
-  unsigned long decelStartMs;
+  // MODE_SURGE (speeds in %)
+  uint8_t startPct;             // Duty at motor-on
+  unsigned long takeOffRampMs;  // Start -> take-off
+  uint8_t takeOffPct;
+  unsigned long hyperRampMs;    // Take-off -> hyper
+  uint8_t hyperPct;
+  unsigned long hyperHoldMs;    // Time at hyper
+  unsigned long cruiseRampMs;   // Hyper -> cruise
+  uint8_t cruisePct;
+  unsigned long limitClearMs;  // 0 = not measured
 };
 
 struct ShipIO {
@@ -58,7 +65,5 @@ void motorBrake(ShipIO &s);
 void motorDrive(ShipIO &s, Dir d, uint8_t duty);  // duty 0 = brake, 255 = full
 
 // Speed profile, elapsed = ms since the trip started
-unsigned long accelMs(const ShipTuning &t);
-unsigned long decelMs(const ShipTuning &t);
-uint8_t accelDuty(const ShipTuning &t, unsigned long elapsed);  // Accel, then hold steady
 uint8_t tripDuty(const ShipTuning &t, unsigned long elapsed);   // Per t.mode
+unsigned long clearMs(const ShipTuning &t);  // Wrong-way check time for this ship's mode

@@ -5,23 +5,23 @@
 /*****  Space Ships — v0.4 live firmware  *****
  *  Platform: Arduino Nano Every (ATmega4809, 5V logic). One DRV8871 per ship.
  *  Cycle per ship (independent): move → hit limit → brake → DWELL_TIME → reverse, repeating.
- *  Speed per ship from ship_config.h: MODE_STEADY or MODE_RAMP. Fixed values, nothing adapts.
+ *  Speed per ship from ship_config.h: MODE_STEADY or MODE_SURGE. Fixed values, nothing adapts.
  *  All tunable values: include/ship_config.h. Motor and limit code: ship_motion.cpp (shared).
  *
  *  Safety layers:
  *    1. Move timeout — target limit never reached (slipped rope, jam, dead switch)
- *    2. Wrong-way check — limit behind the ship still active after LIMIT_CLEAR_TIME
+ *    2. Wrong-way check — limit behind the ship still active after clearMs() (LIMIT_CLEAR_TIME or SHIPx_LIMIT_CLEAR_MS)
  *    3. Both-limits check — mechanically impossible → wiring fault
  *    4. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
  *    5. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
  *********************************************/
 
-// Ramp needs calibrated values: fail the build, not the display.
-#if (SHIP1_MODE == MODE_RAMP) && (SHIP1_STEADY_TRIP_MS == 0 || SHIP1_MIN_DUTY == 0 || SHIP1_MIN_DUTY >= SHIP1_STEADY_DUTY)
-  #error "Ship 1 RAMP: calibration values missing. Run bench_test t, m, r, then paste 'p' output."
+// Surge needs a measured wrong-way time, or every trip faults: fail the build, not the display.
+#if (SHIP1_MODE == MODE_SURGE) && (SHIP1_LIMIT_CLEAR_MS == 0)
+  #error "Ship 1 SURGE: SHIP1_LIMIT_CLEAR_MS is 0. Run bench_test c, then paste 'p' output."
 #endif
-#if (SHIP2_MODE == MODE_RAMP) && (SHIP2_STEADY_TRIP_MS == 0 || SHIP2_MIN_DUTY == 0 || SHIP2_MIN_DUTY >= SHIP2_STEADY_DUTY)
-  #error "Ship 2 RAMP: calibration values missing. Run bench_test t, m, r, then paste 'p' output."
+#if (SHIP2_MODE == MODE_SURGE) && (SHIP2_LIMIT_CLEAR_MS == 0)
+  #error "Ship 2 SURGE: SHIP2_LIMIT_CLEAR_MS is 0. Run bench_test c, then paste 'p' output."
 #endif
 
 /****** Types ******/
@@ -110,7 +110,7 @@ void updateMove(Ship &s, ShipState arrivedState) {
   if (aheadOf(s.io, d).active) {
     s.faultCount = 0;
     enterState(s, arrivedState);
-  } else if (behindOf(s.io, d).active && elapsed >= LIMIT_CLEAR_TIME) {
+  } else if (behindOf(s.io, d).active && elapsed >= clearMs(s.tune)) {
     shipFault(s, F("limit behind ship still active — motor reversed or ship jammed"));
   } else if (elapsed >= MOVE_TIMEOUT) {
     shipFault(s, F("move timeout — limit never reached"));

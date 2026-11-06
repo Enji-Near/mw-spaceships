@@ -3,16 +3,21 @@
 #include "ship_motion.h"
 
 /*****  Space Ships — bench test and calibration  *****
- *  115200 baud. Single-key commands; number prompts end with Enter.
- *    5-8  Hold to jog: Ship 1→POS1, Ship 1→POS2, Ship 2→POS1, Ship 2→POS2 (JOG_DUTY). Release to stop.
+ *  115200 baud. Single-key commands; number prompts end with Enter. Backspace edits, Esc cancels.
+ *    5-8  Hold to jog: Ship 1→POS1, Ship 1→POS2, Ship 2→POS1, Ship 2→POS2. Release to stop.
+ *    j    Set jog duty % (starts at JOG_PCT, kept until reset)
  *    w    Watch raw limit levels (check NO/NC → SHIPx_POSx_ACTIVE)
  *    t    Steady speed: type a target one-way time per ship, up to 3 round trips, then run
  *    m    Minimum speed: 1000 ms out at steady, return at 90/80/70...% until the return takes >= 2750 ms
- *    r    Ramp: type accel % and decel % per ship, 1 round trip, then run
+ *    d    Duty test: type duty % per ship, shuttle at that duty until any key. Stops where it is.
+ *    a    Accel profile (MODE_SURGE): change values for Ship 1/2/both, then test 1 round trip, print values
+ *    c    Wrong-way time: from POS1, time motor-on to switch release on the profile, CLEAR_RUNS times.
+ *         Retracts at the release duty + CLEAR_RETRACT_ADD_PCT: known to move, still slow.
+ *    g    Go: run continuously with the current values (ship_config.h or last test), Enter/0 per ship
  *    p    Print the calibration block to paste into include/ship_config.h
  *    s    Stop all;  h  menu
- *  Both ships run together. Enter on an empty prompt skips that ship.
- *  After t and r, both ships run continuously with DWELL_TIME until any key.
+ *  Both ships run together. Enter (or 0 for t and d) skips that ship; m skips ships without steady values.
+ *  After t, the ships that took part run continuously with DWELL_TIME until any key.
  *  No move timeout here (someone is watching): if a ship stalls, press any key.
  *  Kept from live: wrong-way check, both-limits check, watchdog.
  *  Values start from ship_config.h; each test keeps only its latest results.
@@ -20,8 +25,8 @@
 
 /****** Types ******/
 enum Mode    { IDLE, WATCHING, JOGGING, TASK };
-enum Task    { T_STEADY, T_MIN, T_RAMP, T_RUN };
-enum Profile { P_CONST, P_ACCEL, P_TRIP };
+enum Task    { T_STEADY, T_MIN, T_RUN, T_DUTY, T_PROF, T_CLEAR };
+enum Profile { P_CONST, P_TRIP };
 
 // One ship's progress through a task
 struct Runner {
@@ -39,6 +44,7 @@ struct Runner {
   unsigned long boostAfter; // 0 = never. Min test: past this, finish the return at steady duty.
   bool boosted;
   bool atLimit;             // Last move ended on the limit (not on stopAfter)
+  bool stopOnClear;         // Wrong-way calibration: end the move when the limit behind releases
   unsigned long lastMs;     // Last move time, ms
   // Pause before the next step
   bool waiting;
@@ -67,6 +73,7 @@ bool motorOn[2]             = { false, false };
 bool motorUsed[2]           = { false, false };
 Dir lastDir[2]              = { TO_POS1, TO_POS1 };
 unsigned long motorOffAt[2] = { 0, 0 };
+uint8_t jogPct = JOG_PCT;
 uint8_t jogShip = 0;
 Dir jogDir = TO_POS1;
 char jogKey = 0;
@@ -106,6 +113,9 @@ void stopAll() {
   rn[0].waiting = rn[1].waiting = false;
 }
 
+// % 1-100 to PWM duty, rounded. 100% = 255 = full drive.
+uint8_t pctToDuty(uint8_t pct) { return (uint8_t)(((unsigned int)pct * 255 + 50) / 100); }
+
 /****** Output Helpers ******/
 void printShip(uint8_t i) {
   Serial.print(F("Ship "));
@@ -128,14 +138,23 @@ void printBlock() {
   for (uint8_t i = 0; i < 2; i++) {
     Serial.print(F("#define SHIP"));
     Serial.print(i + 1);
-    Serial.print((tune[i].mode == MODE_RAMP) ? F("_MODE            MODE_RAMP\n") : F("_MODE            MODE_STEADY\n"));
-    printDefine(i, F("_STEADY_DUTY     "), tune[i].steadyDuty);
-    printDefine(i, F("_STEADY_TRIP_MS  "), tune[i].steadyTripMs);
-    printDefine(i, F("_MIN_DUTY        "), tune[i].minDuty);
-    printDefine(i, F("_MIN_TRIP_MS     "), tune[i].minTripMs);
-    printDefine(i, F("_ACCEL_PCT       "), tune[i].accelPct);
-    printDefine(i, F("_DECEL_PCT       "), tune[i].decelPct);
-    printDefine(i, F("_DECEL_START_MS  "), tune[i].decelStartMs);
+    switch (tune[i].mode) {
+      case MODE_SURGE: Serial.print(F("_MODE                    MODE_SURGE\n")); break;
+      default:         Serial.print(F("_MODE                    MODE_STEADY\n")); break;
+    }
+    printDefine(i, F("_STEADY_DUTY             "), tune[i].steadyDuty);
+    printDefine(i, F("_STEADY_TRIP_MS          "), tune[i].steadyTripMs);
+    printDefine(i, F("_MIN_DUTY                "), tune[i].minDuty);
+    printDefine(i, F("_MIN_TRIP_MS             "), tune[i].minTripMs);
+    printDefine(i, F("_START_SPEED             "), tune[i].startPct);
+    printDefine(i, F("_RAMP_TO_TAKE_OFF_MS     "), tune[i].takeOffRampMs);
+    printDefine(i, F("_TAKE_OFF_SPEED          "), tune[i].takeOffPct);
+    printDefine(i, F("_ACCEL_TO_HYPER_SPEED_MS "), tune[i].hyperRampMs);
+    printDefine(i, F("_HYPER_SPEED             "), tune[i].hyperPct);
+    printDefine(i, F("_TIME_AT_HYPER_SPEED_MS  "), tune[i].hyperHoldMs);
+    printDefine(i, F("_DECEL_TO_CRUISE_MS      "), tune[i].cruiseRampMs);
+    printDefine(i, F("_CRUISE_SPEED            "), tune[i].cruisePct);
+    printDefine(i, F("_LIMIT_CLEAR_MS          "), tune[i].limitClearMs);
   }
   Serial.print(F("// ---- END CALIBRATION ----\n"));
 }
@@ -143,10 +162,16 @@ void printBlock() {
 void printMenu() {
   Serial.print(F("\n--- Space Ships bench test v0.4 ---\n"));
   Serial.print(F("5-8 hold to jog: S1>POS1, S1>POS2, S2>POS1, S2>POS2\n"));
+  Serial.print(F("j  set jog duty (now "));
+  Serial.print(jogPct);
+  Serial.print(F("%)\n"));
   Serial.print(F("w  watch raw limit levels\n"));
   Serial.print(F("t  steady speed calibration, then run\n"));
   Serial.print(F("m  minimum speed calibration\n"));
-  Serial.print(F("r  ramp calibration, then run\n"));
+  Serial.print(F("d  duty test: shuttle at a set duty %\n"));
+  Serial.print(F("a  accel profile: set values, test\n"));
+  Serial.print(F("c  wrong-way time calibration\n"));
+  Serial.print(F("g  go: run with current values\n"));
   Serial.print(F("p  print calibration block\n"));
   Serial.print(F("s  stop all\n"));
   Serial.print(F("h  this menu\n"));
@@ -171,19 +196,25 @@ void abortAll(int8_t ship, const __FlashStringHelper *reason) {
 
 /****** Number Prompt ******/
 // Blocking is fine here: motors are braked while waiting. Returns -1 = cancelled, -2 = empty (skip).
+// Digits, Backspace/Delete edit, Enter accepts, Esc cancels. Anything else is refused, prompt stays open.
 long readNumber(const __FlashStringHelper *prompt) {
   Serial.print(prompt);
   long v = 0;
-  bool any = false;
+  uint8_t digits = 0;
   while (true) {
     wdt_reset();
     if (!Serial.available()) continue;
     char c = Serial.read();
     if (c >= '0' && c <= '9') {
-      if (v > 999999L) continue;  // Ignore absurd lengths
+      if (digits >= 6) continue;  // Ignore absurd lengths
       v = v * 10 + (c - '0');
-      any = true;
+      digits++;
       Serial.print(c);
+    } else if (c == '\b' || c == 0x7F) {  // Terminals send either for Backspace
+      if (digits == 0) continue;
+      v /= 10;
+      digits--;
+      Serial.print(F("\b \b"));
     } else if (c == '\r' || c == '\n') {
       // Swallow the rest of a CR+LF pair, so it can't answer the next prompt.
       unsigned long t = millis();
@@ -192,10 +223,13 @@ long readNumber(const __FlashStringHelper *prompt) {
         if (n == '\r' || n == '\n') Serial.read();
       }
       Serial.print(F("\n"));
-      return any ? v : -2;
-    } else {
+      return digits ? v : -2;
+    } else if (c == 0x1B) {
       Serial.print(F("\nCancelled\n"));
       return -1;
+    } else {
+      Serial.print(F("\ninvalid character, keep typing: "));
+      if (digits) Serial.print(v);  // Re-show what was typed so far
     }
   }
 }
@@ -210,6 +244,7 @@ void startMove(uint8_t i, Dir d, Profile p, uint8_t duty) {
   r.stopAfter  = 0;
   r.boostAfter = 0;
   r.boosted    = false;
+  r.stopOnClear = false;
   r.moving     = true;
 }
 
@@ -230,7 +265,6 @@ bool atALimit(uint8_t i)     { return shipIO[i].pos1.active || shipIO[i].pos2.ac
 uint8_t currentDuty(uint8_t i, unsigned long e) {
   Runner &r = rn[i];
   switch (r.profile) {
-    case P_ACCEL: return accelDuty(tune[i], e);
     case P_TRIP:  return tripDuty(tune[i], e);
     default:      return r.boosted ? tune[i].steadyDuty : r.duty;
   }
@@ -269,7 +303,7 @@ void finishSteady(uint8_t i, uint8_t k) {
   Runner &r = rn[i];
   tune[i].steadyDuty   = r.runDuty[k];
   tune[i].steadyTripMs = r.runMs[k];
-  tune[i].mode         = MODE_STEADY;  // Run after t is steady; re-run r for ramp
+  tune[i].mode         = MODE_STEADY;  // Run after t is steady; use a to go back to the profile
   printShip(i);
   Serial.print(F("steady duty "));
   Serial.print(r.runDuty[k]);
@@ -431,75 +465,6 @@ void stepMin(uint8_t i) {
   }
 }
 
-/****** Ramp (r) ******/
-void finishRamp(uint8_t i) {
-  Runner &r = rn[i];
-  ShipTuning &t = tune[i];
-  unsigned long accelTrip = r.legSum / 2;
-  // Decel from steady to min averages (vSteady + vMin) / 2 on an S-curve, so it covers
-  // decelMs * (1 + ratio) / 2 of steady-speed travel time. Start it that much before the accel-trip arrival.
-  float ratio = (float)t.steadyTripMs / t.minTripMs;  // vMin / vSteady
-  float lead  = decelMs(t) * (1.0f + ratio) / 2.0f;
-  long start  = (long)accelTrip - (long)(lead + 0.5f);
-  printShip(i);
-  Serial.print(F("accel trip avg "));
-  Serial.print(accelTrip);
-  Serial.print(F(" ms, decel start "));
-  if (start < 0) {
-    start = 0;
-    Serial.print(F("0 ms (DECEL_PCT too large for this trip)"));
-  } else {
-    Serial.print(start);
-    Serial.print(F(" ms"));
-  }
-  Serial.print(F("\n"));
-  t.decelStartMs = (unsigned long)start;
-  t.mode = MODE_RAMP;
-  shipDone(i, true);
-}
-
-void stepRamp(uint8_t i) {
-  Runner &r = rn[i];
-  switch (r.step) {
-    case 0:
-      r.legs = 0;
-      r.legSum = 0;
-      r.step = 1;
-      if (!shipIO[i].pos1.active) {
-        printShip(i);
-        Serial.print(F("homing to POS1 (untimed)\n"));
-        startMove(i, TO_POS1, P_CONST, tune[i].steadyDuty);
-        r.step = 3;  // Homing done → pause → first leg
-        return;
-      }
-      [[fallthrough]];
-    case 1:
-      startMove(i, awayFromLimit(i), P_ACCEL, 0);
-      r.step = 2;
-      return;
-    case 2:
-      r.legSum += r.lastMs;
-      r.legs++;
-      printShip(i);
-      Serial.print(F("accel only, "));
-      printDir(r.dir);
-      Serial.print(F(" "));
-      Serial.print(r.lastMs);
-      Serial.print(F(" ms\n"));
-      if (r.legs < 2) {
-        r.step = 1;
-        waitThen(i, REVERSE_PAUSE);
-        return;
-      }
-      finishRamp(i);
-      return;
-    case 3:
-      r.step = 1;
-      waitThen(i, REVERSE_PAUSE);
-      return;
-  }
-}
-
 /****** Continuous run (after t and r) ******/
 void stepRun(uint8_t i) {
   Runner &r = rn[i];
@@ -525,12 +490,157 @@ void stepRun(uint8_t i) {
   }
 }
 
+/****** Duty test (d) ******/
+// Manual tuning: fixed duty, no calibration results stored.
+void printDutyLeg(uint8_t i) {
+  printShip(i);
+  Serial.print(rn[i].pct);
+  Serial.print(F("% (duty "));
+  Serial.print(rn[i].duty);
+  Serial.print(F(") "));
+  printDir(rn[i].dir);
+  Serial.print(F(" "));
+  Serial.print(rn[i].lastMs);
+  Serial.print(F(" ms\n"));
+}
+
+void stepDuty(uint8_t i) {
+  Runner &r = rn[i];
+  switch (r.step) {
+    case 0:  // Mid-track: head to POS1 first, same as live
+      startMove(i, atALimit(i) ? awayFromLimit(i) : TO_POS1, P_CONST, r.duty);
+      r.step = 2;
+      return;
+    case 1:
+      startMove(i, awayFromLimit(i), P_CONST, r.duty);
+      r.step = 2;
+      return;
+    case 2:
+      printDutyLeg(i);
+      r.step = 1;
+      waitThen(i, REVERSE_PAUSE);
+      return;
+  }
+}
+
+/****** Accel profile test (a) and wrong-way time (c) ******/
+// While values are being found, a generous limit; the measured one is used by g and live.
+unsigned long clearLimit(uint8_t i) {
+  if (task == T_PROF || task == T_CLEAR) return CLEAR_CAL_MAX_MS;
+  if (rn[i].profile == P_TRIP) return clearMs(tune[i]);
+  return LIMIT_CLEAR_TIME;
+}
+
+// One round trip on the profile. Mid-track: home to POS1 first (untimed).
+void stepProf(uint8_t i) {
+  Runner &r = rn[i];
+  switch (r.step) {
+    case 0:
+      r.legs = 0;
+      r.step = 1;
+      if (!atALimit(i)) {
+        printShip(i);
+        Serial.print(F("homing to POS1 (untimed)\n"));
+        startMove(i, TO_POS1, P_TRIP, 0);
+        r.step = 3;
+        return;
+      }
+      [[fallthrough]];
+    case 1:
+      startMove(i, awayFromLimit(i), P_TRIP, 0);
+      r.step = 2;
+      return;
+    case 2:
+      printLeg(i);
+      if (++r.legs >= 2) { shipDone(i, true); return; }
+      r.step = 1;
+      waitThen(i, DWELL_TIME);
+      return;
+    case 3:
+      r.step = 1;
+      waitThen(i, DWELL_TIME);
+      return;
+  }
+}
+
+void finishClear(uint8_t i) {
+  Runner &r = rn[i];
+  unsigned long avg = r.legSum / CLEAR_RUNS;
+  tune[i].limitClearMs = avg + CLEAR_MARGIN_MS;
+  printShip(i);
+  Serial.print(F("clear avg "));
+  Serial.print(avg);
+  Serial.print(F(" ms, LIMIT_CLEAR_MS = "));
+  Serial.print(tune[i].limitClearMs);
+  Serial.print(F(" ms\n"));
+  shipDone(i, true);
+}
+
+// Duty where the switch released, + CLEAR_RETRACT_ADD_PCT points, capped at full.
+uint8_t retractDuty(uint8_t i) {
+  unsigned int d = tripDuty(tune[i], rn[i].lastMs) + PCT_TO_DUTY(CLEAR_RETRACT_ADD_PCT);
+  return (d > 255) ? 255 : (uint8_t)d;
+}
+
+// From POS1: profile toward POS2 until POS1 releases, then back to POS1 at retractDuty().
+void stepClear(uint8_t i) {
+  Runner &r = rn[i];
+  switch (r.step) {
+    case 0:
+      r.legs = 0;
+      r.legSum = 0;
+      r.step = 1;
+      if (!shipIO[i].pos1.active) {
+        printShip(i);
+        Serial.print(F("homing to POS1 (untimed)\n"));
+        startMove(i, TO_POS1, P_TRIP, 0);
+        r.step = 4;
+        return;
+      }
+      [[fallthrough]];
+    case 1:
+      startMove(i, TO_POS2, P_TRIP, 0);
+      r.stopOnClear = true;
+      r.step = 2;
+      return;
+    case 2:
+      r.legSum += r.lastMs;
+      r.legs++;
+      printShip(i);
+      Serial.print(F("clear run "));
+      Serial.print(r.legs);
+      Serial.print(F(": "));
+      Serial.print(r.lastMs);
+      Serial.print(F(" ms, retracting at duty "));
+      Serial.print(retractDuty(i));
+      Serial.print(F("/255\n"));
+      r.step = 3;
+      waitThen(i, REVERSE_PAUSE);
+      return;
+    case 3:
+      if (r.dir == TO_POS2) {  // Pause done: retract
+        startMove(i, TO_POS1, P_CONST, retractDuty(i));
+        return;
+      }
+      if (r.legs >= CLEAR_RUNS) { finishClear(i); return; }  // Retracted to POS1
+      r.step = 1;
+      waitThen(i, REVERSE_PAUSE);
+      return;
+    case 4:  // Homing done
+      r.step = 1;
+      waitThen(i, REVERSE_PAUSE);
+      return;
+  }
+}
+
 void stepTask(uint8_t i) {
   switch (task) {
     case T_STEADY: stepSteady(i); break;
     case T_MIN:    stepMin(i); break;
-    case T_RAMP:   stepRamp(i); break;
     case T_RUN:    stepRun(i); break;
+    case T_DUTY:   stepDuty(i); break;
+    case T_PROF:   stepProf(i); break;
+    case T_CLEAR:  stepClear(i); break;
   }
 }
 
@@ -559,12 +669,16 @@ void updateRunner(uint8_t i) {
   LimitSwitch &ahead = aheadOf(s, r.dir);
   unsigned long e = millis() - r.start;
 
+  LimitSwitch &behind = behindOf(s, r.dir);
+
   if (bothLimits(s)) {
     abortAll(i, F("both limits active — check wiring"));
+  } else if (r.stopOnClear && !behind.active) {
+    endMove(i, arrivalMs(behind, r.start), false);  // Raw release edge, same timing as arrivals
   } else if (ahead.active) {
     endMove(i, arrivalMs(ahead, r.start), true);
-  } else if (behindOf(s, r.dir).active && e >= LIMIT_CLEAR_TIME) {
-    abortAll(i, F("limit behind ship still active — motor reversed, jammed, or too slow to clear in LIMIT_CLEAR_TIME"));
+  } else if (behind.active && e >= clearLimit(i)) {
+    abortAll(i, F("limit behind ship still active — motor reversed, jammed, or too slow to clear (LIMIT_CLEAR_TIME / LIMIT_CLEAR_MS, c)"));
   } else if (r.stopAfter && e >= r.stopAfter) {
     endMove(i, e, false);
   } else {
@@ -596,9 +710,10 @@ void kickTask() {
   for (uint8_t i = 0; i < 2; i++) if (rn[i].active) stepTask(i);
 }
 
-void startRun() {
-  Serial.print(F("\nRunning both ships with DWELL_TIME. Any key stops.\n"));
-  startTask(T_RUN, true, true);
+// Only ships that took part in the test, so a skipped ship stays parked.
+void startRun(bool use1, bool use2) {
+  Serial.print(F("\nRunning with DWELL_TIME. Any key stops.\n"));
+  startTask(T_RUN, use1, use2);
   if (mode == TASK) kickTask();
 }
 
@@ -612,8 +727,8 @@ void taskFinished() {
     Serial.print(F("\nCalibration failed for a ship, see above. Values for that ship unchanged.\n"));
   }
   printBlock();
-  if (!anyFail && (task == T_STEADY || task == T_RAMP)) {
-    startRun();
+  if (!anyFail && task == T_STEADY) {
+    startRun(rn[0].active, rn[1].active);
   } else {
     Serial.print(F("> "));
   }
@@ -624,11 +739,10 @@ void cmdSteady() {
   long tgt[2];
   for (uint8_t i = 0; i < 2; i++) {
     printShip(i);
-    tgt[i] = readNumber(F("target one-way time, ms (Enter = skip): "));
+    tgt[i] = readNumber(F("target one-way time, ms (Enter or 0 = skip): "));
     if (tgt[i] == -1) { Serial.print(F("> ")); return; }
-    if (tgt[i] == 0) { Serial.print(F("Must be > 0\n> ")); return; }
   }
-  if (tgt[0] < 0 && tgt[1] < 0) { Serial.print(F("Both skipped\n> ")); return; }
+  if (tgt[0] <= 0 && tgt[1] <= 0) { Serial.print(F("Both skipped\n> ")); return; }
   startTask(T_STEADY, tgt[0] > 0, tgt[1] > 0);
   if (mode != TASK) return;
   for (uint8_t i = 0; i < 2; i++) rn[i].target = (tgt[i] > 0) ? tgt[i] : 0;
@@ -637,48 +751,148 @@ void cmdSteady() {
 }
 
 bool steadyReady(uint8_t i) { return tune[i].steadyTripMs > 0; }
-bool minReady(uint8_t i)    { return tune[i].minDuty > 0 && tune[i].minTripMs > 0 && tune[i].minDuty < tune[i].steadyDuty; }
-
 void cmdMin() {
   for (uint8_t i = 0; i < 2; i++) {
     if (!steadyReady(i)) {
       printShip(i);
-      Serial.print(F("no steady values, run t first\n> "));
-      return;
+      Serial.print(F("no steady values (run t first), skipped\n"));
     }
   }
-  startTask(T_MIN, true, true);
+  if (!steadyReady(0) && !steadyReady(1)) { Serial.print(F("> ")); return; }
+  startTask(T_MIN, steadyReady(0), steadyReady(1));
   if (mode != TASK) return;
   Serial.print(F("Minimum speed calibration. Any key aborts.\n"));
   kickTask();
 }
 
-void cmdRamp() {
-  long acc[2] = { -2, -2 }, dec[2] = { -2, -2 };
+void cmdDuty() {
+  long pct[2];
   for (uint8_t i = 0; i < 2; i++) {
     printShip(i);
-    acc[i] = readNumber(F("accel, % of trip (Enter = skip ship): "));
-    if (acc[i] == -1) { Serial.print(F("> ")); return; }
-    if (acc[i] == -2) continue;
-    if (!steadyReady(i) || !minReady(i)) {
-      printShip(i);
-      Serial.print(F("needs steady (t) and minimum speed (m) first\n> "));
-      return;
-    }
-    printShip(i);
-    dec[i] = readNumber(F("decel, % of trip: "));
-    if (dec[i] < 0) { Serial.print(F("> ")); return; }
-    if (acc[i] + dec[i] > 100) { Serial.print(F("accel + decel must be <= 100\n> ")); return; }
+    pct[i] = readNumber(F("duty, % 1-100 (Enter or 0 = skip): "));
+    if (pct[i] == -1) { Serial.print(F("> ")); return; }
+    if (pct[i] > 100) { Serial.print(F("Must be 0-100\n> ")); return; }
   }
-  if (acc[0] < 0 && acc[1] < 0) { Serial.print(F("Both skipped\n> ")); return; }
-  startTask(T_RAMP, acc[0] >= 0, acc[1] >= 0);
+  if (pct[0] <= 0 && pct[1] <= 0) { Serial.print(F("Both skipped\n> ")); return; }
+  startTask(T_DUTY, pct[0] > 0, pct[1] > 0);
   if (mode != TASK) return;
   for (uint8_t i = 0; i < 2; i++) {
-    if (acc[i] < 0) continue;
-    tune[i].accelPct = (uint8_t)acc[i];
-    tune[i].decelPct = (uint8_t)dec[i];
+    if (pct[i] <= 0) continue;
+    rn[i].pct  = (uint8_t)pct[i];
+    rn[i].duty = pctToDuty((uint8_t)pct[i]);
   }
-  Serial.print(F("Ramp calibration: 1 round trip with accel only. Any key aborts.\n"));
+  Serial.print(F("Duty test, REVERSE_PAUSE between legs. Any key stops; ships stay where they are.\n"));
+  kickTask();
+}
+
+void cmdJogDuty() {
+  Serial.print(F("Jog duty now "));
+  Serial.print(jogPct);
+  long v = readNumber(F("%. New %, 1-100 (Enter = keep): "));
+  if (v < 0) { Serial.print(F("> ")); return; }
+  if (v == 0 || v > 100) { Serial.print(F("Must be 1-100\n> ")); return; }
+  jogPct = (uint8_t)v;
+  Serial.print(F("Jog duty "));
+  Serial.print(jogPct);
+  Serial.print(F("%\n> "));
+}
+
+void cmdGo() {
+  long use[2];
+  for (uint8_t i = 0; i < 2; i++) {
+    printShip(i);
+    use[i] = readNumber(F("run? (Enter = yes, 0 = skip): "));
+    if (use[i] == -1) { Serial.print(F("> ")); return; }
+  }
+  if (use[0] == 0 && use[1] == 0) { Serial.print(F("Both skipped\n> ")); return; }
+  startRun(use[0] != 0, use[1] != 0);
+}
+
+// 1 = Ship 1, 2 = Ship 2, 3 = both. Returns bit mask (1, 2, 3), 0 = none, -1 = cancelled.
+int8_t askShips(const __FlashStringHelper *what) {
+  while (true) {
+    Serial.print(what);
+    long v = readNumber(F(" 1 = Ship 1, 2 = Ship 2, 3 = both, Enter = none: "));
+    if (v == -1) return -1;
+    if (v == -2) return 0;
+    if (v >= 1 && v <= 3) return (int8_t)v;
+    Serial.print(F("Must be 1-3\n"));  // Ask again
+  }
+}
+
+// Prompt one value showing the current one. Enter keeps it, out of range asks again. False = Esc.
+bool askValue(const __FlashStringHelper *name, unsigned long &v, unsigned long maxV) {
+  while (true) {
+    Serial.print(name);
+    Serial.print(F(" (now "));
+    Serial.print(v);
+    long n = readNumber(F(", Enter = keep): "));
+    if (n == -1) return false;
+    if (n == -2) return true;
+    if ((unsigned long)n <= maxV) {
+      v = (unsigned long)n;
+      return true;
+    }
+    Serial.print(F("Must be 0-"));
+    Serial.print(maxV);
+    Serial.print(F("\n"));
+  }
+}
+
+// Edit on Ship (first of mask), apply to every ship in mask.
+bool editProfile(uint8_t mask) {
+  ShipTuning &t = tune[(mask & 1) ? 0 : 1];
+  unsigned long s0 = t.startPct, r1 = t.takeOffRampMs, s1 = t.takeOffPct, r2 = t.hyperRampMs, s2 = t.hyperPct;
+  unsigned long h  = t.hyperHoldMs, r3 = t.cruiseRampMs, s3 = t.cruisePct;
+  if (!askValue(F("start_speed, %"), s0, 100)) return false;
+  if (!askValue(F("ramp_to_take_off, ms"), r1, 60000UL)) return false;
+  if (!askValue(F("take_off_speed, %"), s1, 100)) return false;
+  if (!askValue(F("accel_to_hyper_speed, ms"), r2, 60000UL)) return false;
+  if (!askValue(F("hyper_speed, %"), s2, 100)) return false;
+  if (!askValue(F("time_at_hyper_speed, ms"), h, 60000UL)) return false;
+  if (!askValue(F("decel_to_cruise, ms"), r3, 60000UL)) return false;
+  if (!askValue(F("cruise_speed, %"), s3, 100)) return false;
+  for (uint8_t i = 0; i < 2; i++) {
+    if (!(mask & (1 << i))) continue;
+    ShipTuning &u = tune[i];
+    bool startChanged = (u.startPct != s0 || u.takeOffRampMs != r1 || u.takeOffPct != s1);
+    u.startPct      = (uint8_t)s0;
+    u.takeOffRampMs = r1; u.takeOffPct = (uint8_t)s1;
+    u.hyperRampMs   = r2; u.hyperPct   = (uint8_t)s2;
+    u.hyperHoldMs   = h;
+    u.cruiseRampMs  = r3; u.cruisePct  = (uint8_t)s3;
+    u.mode = MODE_SURGE;
+    if (startChanged && u.limitClearMs > 0) {  // Measured time no longer matches the take-off ramp
+      u.limitClearMs = 0;
+      printShip(i);
+      Serial.print(F("start or take-off changed, LIMIT_CLEAR_MS reset to 0: run c before g or live\n"));
+    }
+  }
+  return true;
+}
+
+void cmdProfile() {
+  int8_t edit = askShips(F("Change values for:"));
+  if (edit < 0) { Serial.print(F("> ")); return; }
+  if (edit > 0 && !editProfile((uint8_t)edit)) { Serial.print(F("> ")); return; }
+  int8_t test = askShips(F("Test (1 round trip):"));
+  if (test <= 0) { printBlock(); Serial.print(F("> ")); return; }
+  startTask(T_PROF, test & 1, test & 2);
+  if (mode != TASK) return;
+  for (uint8_t i = 0; i < 2; i++) if (test & (1 << i)) tune[i].mode = MODE_SURGE;
+  Serial.print(F("Profile test, 1 round trip, DWELL_TIME between legs. Any key aborts.\n"));
+  kickTask();
+}
+
+void cmdClear() {
+  int8_t use = askShips(F("Wrong-way time calibration for:"));
+  if (use <= 0) { Serial.print(F("> ")); return; }
+  startTask(T_CLEAR, use & 1, use & 2);
+  if (mode != TASK) return;
+  for (uint8_t i = 0; i < 2; i++) if (use & (1 << i)) tune[i].mode = MODE_SURGE;
+  Serial.print(F("Wrong-way time: "));
+  Serial.print(CLEAR_RUNS);
+  Serial.print(F(" runs from POS1 on the profile. Any key aborts.\n"));
   kickTask();
 }
 
@@ -762,8 +976,10 @@ void startJog(uint8_t i, Dir d, char key) {
   mode         = JOGGING;
   printShip(i);
   printDir(d);
-  Serial.print(F(" jogging, release key to stop\n"));
-  benchDrive(i, d, JOG_DUTY);
+  Serial.print(F(" jogging at "));
+  Serial.print(jogPct);
+  Serial.print(F("%, release key to stop\n"));
+  benchDrive(i, d, pctToDuty(jogPct));
 }
 
 void endJog(const __FlashStringHelper *reason) {
@@ -798,7 +1014,11 @@ void handleIdleKey(char c) {
     case 'w': startWatch(); break;
     case 't': cmdSteady(); break;
     case 'm': cmdMin(); break;
-    case 'r': cmdRamp(); break;
+    case 'd': cmdDuty(); break;
+    case 'j': cmdJogDuty(); break;
+    case 'g': cmdGo(); break;
+    case 'a': cmdProfile(); break;
+    case 'c': cmdClear(); break;
     case 'p': printBlock(); Serial.print(F("> ")); break;
     case 's': stopAll(); Serial.print(F("All stopped\n> ")); break;
     case 'h':
@@ -829,7 +1049,7 @@ void handleSerial() {
   } else if (mode == TASK) {
     Serial.print(F("\nStopped by key\n"));
     restoreUnfinished();
-    printBlock();
+    if (task != T_DUTY) printBlock();  // Duty test changes no calibration values
     toIdle();
   } else if (!isLatched(c)) {
     handleIdleKey(c);

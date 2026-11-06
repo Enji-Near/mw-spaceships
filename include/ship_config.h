@@ -29,6 +29,12 @@ const uint8_t SHIP2_LIMIT_POS2 = 4;
 #define SHIP2_POS1_ACTIVE  HIGH
 #define SHIP2_POS2_ACTIVE  HIGH
 
+/****** PWM frequency ******/
+// TCA0 prescaler. 2 = 31.25 kHz (above hearing). 64 = core default 977 Hz (audible squeal).
+// DRV8871 allows 0-200 kHz, pulses >= 800 ns (TI SLVSCY9B §6.3). Allowed: 1, 2, 4, 8, 16, 64.
+// Changing it changes how speed responds to duty: re-check calibration after a change.
+#define PWM_TCA_DIV  2
+
 /****** Status ******/
 const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = fault
 
@@ -40,8 +46,8 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 
 /****** Live timing (ms) ******/
 #define DWELL_TIME        5000UL   // Pause at each end (also used by bench continuous runs)
-#define MOVE_TIMEOUT      64000UL  // Live only. Relay-era value; re-time on site at final speeds (1.5x slowest trip)
-#define LIMIT_CLEAR_TIME  1500UL   // Ship must leave the limit behind it within this time (wrong-way check)
+#define MOVE_TIMEOUT      93000UL  // Live only. 1.5x slowest bench trip (Ship 2, 62007 ms, 2026-11-05)
+#define LIMIT_CLEAR_TIME  1500UL   // Ship must leave the limit behind it within this time (wrong-way check). MODE_SURGE: SHIPx_LIMIT_CLEAR_MS.
 #define FAULT_RETRY_TIME  10000UL  // Cool-down before retry after a fault
 #define MAX_FAULTS        3        // Consecutive faults before lockout
 #define LIMIT_DEBOUNCE    20UL     // Limit must read steady this long
@@ -50,7 +56,7 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 
 /****** Bench test settings ******/
 #define REVERSE_PAUSE       500UL   // Motor braked between calibration legs (ms)
-#define JOG_DUTY            255     // Jog speed, 0-255
+#define JOG_PCT             40      // Jog speed at boot, % 1-100. Change at runtime with j.
 #define JOG_FIRST_TIMEOUT   700UL   // Jog: wait for key repeat to start (ms). Raise if a held key stutters.
 #define JOG_REPEAT_TIMEOUT  200UL   // Jog: stop this long after the last key repeat (ms)
 #define STEADY_TOLERANCE    500UL   // Steady calibration: OK within +/- this of target (ms)
@@ -61,27 +67,50 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 
 /****** Motion modes ******/
 #define MODE_STEADY  0  // Constant duty, full trip
-#define MODE_RAMP    1  // S-curve accel from MIN to STEADY, S-curve decel, creep at MIN to the limit
+#define MODE_SURGE   1  // S-curves START -> TAKE_OFF -> HYPER, hold HYPER, S-curve -> CRUISE, then CRUISE to the limit
+
+// % 0-100 to PWM duty 0-255, rounded
+#define PCT_TO_DUTY(p)  (((p) * 255 + 50) / 100)
+
+/****** Wrong-way time calibration (bench_test c) ******/
+// Measures motor-on to start-switch release on the MODE_SURGE profile, from POS1.
+#define CLEAR_RUNS         3        // Runs averaged
+#define CLEAR_MARGIN_MS    500UL    // Added to the average to get SHIPx_LIMIT_CLEAR_MS
+#define CLEAR_RETRACT_ADD_PCT  10   // Back to POS1 at the duty where the switch released + this (% points)
+#define CLEAR_CAL_MAX_MS   15000UL  // Bench a/c tests only: wrong-way limit while values are being found
 
 /****** Calibration results — replace this block with bench_test 'p' output ******/
-// STEADY_DUTY: PWM 0-255. STEADY_TRIP_MS: measured one-way time at that duty.
+// STEADY_DUTY: PWM 0-255 (115 = 45%, 140 = 55%). STEADY_TRIP_MS: measured one-way time at that duty.
 // MIN_DUTY: creep duty. MIN_TRIP_MS: estimated one-way time at MIN_DUTY.
-// ACCEL_PCT / DECEL_PCT: % of STEADY_TRIP_MS. DECEL_START_MS: decel start, from trip start.
+// MODE_SURGE: *_SPEED in % 0-100, times in ms. Set with bench_test a. START_SPEED: above MIN_DUTY, so it moves at once.
+// LIMIT_CLEAR_MS: wrong-way time for MODE_SURGE (bench_test c). 0 = not measured: LIMIT_CLEAR_TIME is used.
 // ---- BEGIN CALIBRATION ----
-#define SHIP1_MODE            MODE_STEADY
-#define SHIP1_STEADY_DUTY     255
-#define SHIP1_STEADY_TRIP_MS  0
-#define SHIP1_MIN_DUTY        0
-#define SHIP1_MIN_TRIP_MS     0
-#define SHIP1_ACCEL_PCT       0
-#define SHIP1_DECEL_PCT       0
-#define SHIP1_DECEL_START_MS  0
-#define SHIP2_MODE            MODE_STEADY
-#define SHIP2_STEADY_DUTY     255
-#define SHIP2_STEADY_TRIP_MS  0
-#define SHIP2_MIN_DUTY        0
-#define SHIP2_MIN_TRIP_MS     0
-#define SHIP2_ACCEL_PCT       0
-#define SHIP2_DECEL_PCT       0
-#define SHIP2_DECEL_START_MS  0
+#define SHIP1_MODE                    MODE_SURGE
+#define SHIP1_STEADY_DUTY             115
+#define SHIP1_STEADY_TRIP_MS          41361
+#define SHIP1_MIN_DUTY                46
+#define SHIP1_MIN_TRIP_MS             134423
+#define SHIP1_START_SPEED             25
+#define SHIP1_RAMP_TO_TAKE_OFF_MS     10000
+#define SHIP1_TAKE_OFF_SPEED          45
+#define SHIP1_ACCEL_TO_HYPER_SPEED_MS 2000
+#define SHIP1_HYPER_SPEED             90
+#define SHIP1_TIME_AT_HYPER_SPEED_MS  10000
+#define SHIP1_DECEL_TO_CRUISE_MS      4000
+#define SHIP1_CRUISE_SPEED            50
+#define SHIP1_LIMIT_CLEAR_MS          757
+#define SHIP2_MODE                    MODE_SURGE
+#define SHIP2_STEADY_DUTY             150
+#define SHIP2_STEADY_TRIP_MS          67365
+#define SHIP2_MIN_DUTY                45
+#define SHIP2_MIN_TRIP_MS             218936
+#define SHIP2_START_SPEED             35
+#define SHIP2_RAMP_TO_TAKE_OFF_MS     15000
+#define SHIP2_TAKE_OFF_SPEED          50
+#define SHIP2_ACCEL_TO_HYPER_SPEED_MS 2000
+#define SHIP2_HYPER_SPEED             75
+#define SHIP2_TIME_AT_HYPER_SPEED_MS  55000
+#define SHIP2_DECEL_TO_CRUISE_MS      2000
+#define SHIP2_CRUISE_SPEED            65
+#define SHIP2_LIMIT_CLEAR_MS          950
 // ---- END CALIBRATION ----
