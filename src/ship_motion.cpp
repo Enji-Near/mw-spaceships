@@ -13,10 +13,10 @@ ShipIO shipIO[2] = {
 const ShipTuning SHIP_TUNING[2] = {
   { SHIP1_MODE, SHIP1_STEADY_DUTY, SHIP1_STEADY_TRIP_MS, SHIP1_MIN_DUTY, SHIP1_MIN_TRIP_MS,
     SHIP1_START_SPEED, SHIP1_RAMP_TO_TAKE_OFF_MS, SHIP1_TAKE_OFF_SPEED, SHIP1_ACCEL_TO_HYPER_SPEED_MS, SHIP1_HYPER_SPEED,
-    SHIP1_TIME_AT_HYPER_SPEED_MS, SHIP1_DECEL_TO_CRUISE_MS, SHIP1_CRUISE_SPEED, SHIP1_LIMIT_CLEAR_MS },
+    SHIP1_TIME_AT_HYPER_SPEED_MS, SHIP1_DECEL_TO_CRUISE_MS, SHIP1_CRUISE_SPEED },
   { SHIP2_MODE, SHIP2_STEADY_DUTY, SHIP2_STEADY_TRIP_MS, SHIP2_MIN_DUTY, SHIP2_MIN_TRIP_MS,
     SHIP2_START_SPEED, SHIP2_RAMP_TO_TAKE_OFF_MS, SHIP2_TAKE_OFF_SPEED, SHIP2_ACCEL_TO_HYPER_SPEED_MS, SHIP2_HYPER_SPEED,
-    SHIP2_TIME_AT_HYPER_SPEED_MS, SHIP2_DECEL_TO_CRUISE_MS, SHIP2_CRUISE_SPEED, SHIP2_LIMIT_CLEAR_MS }
+    SHIP2_TIME_AT_HYPER_SPEED_MS, SHIP2_DECEL_TO_CRUISE_MS, SHIP2_CRUISE_SPEED }
 };
 
 /****** Limits ******/
@@ -45,7 +45,6 @@ void shipUpdateLimits(ShipIO &s) {
 
 bool bothLimits(const ShipIO &s) { return s.pos1.active && s.pos2.active; }
 LimitSwitch &aheadOf(ShipIO &s, Dir d)  { return (d == TO_POS1) ? s.pos1 : s.pos2; }
-LimitSwitch &behindOf(ShipIO &s, Dir d) { return (d == TO_POS1) ? s.pos2 : s.pos1; }
 
 /****** Motor ******/
 void motorBrake(ShipIO &s) {
@@ -280,12 +279,6 @@ static uint8_t surgeDuty(const ShipTuning &t, unsigned long e) {
   e -= t.hyperHoldMs;
   if (e < t.cruiseRampMs) return sBlend(hyper, cruise, (float)e / t.cruiseRampMs);
   return cruise;
-}
-
-// MODE_SURGE starts slow, so it needs its measured time; unmeasured falls back and faults loudly.
-unsigned long clearMs(const ShipTuning &t) {
-  if (t.mode == MODE_SURGE && t.limitClearMs > 0) return t.limitClearMs;
-  return LIMIT_CLEAR_TIME;
 }
 
 uint8_t tripDuty(const ShipTuning &t, unsigned long elapsed) {

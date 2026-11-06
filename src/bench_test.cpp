@@ -11,8 +11,6 @@
  *    m    Minimum speed: 1000 ms out at steady, return at 90/80/70...% until the return takes >= 2750 ms
  *    d    Duty test: type duty % per ship, shuttle at that duty until any key. Stops where it is.
  *    a    Accel profile (MODE_SURGE): change values for Ship 1/2/both, then test 1 round trip, print values
- *    c    Wrong-way time: from POS1, time motor-on to switch release on the profile, CLEAR_RUNS times.
- *         Retracts at the release duty + CLEAR_RETRACT_ADD_PCT: known to move, still slow.
  *    g    Go: run continuously with the current values (ship_config.h or last test), Enter/0 per ship
  *    i    (not in the menu) Imperial March: a mid-track ship homes the way it was last going (silent),
  *         MARCH_START_DELAY_MS, then both drive away from their limit at MARCH_DUTY_PCT while the
@@ -22,13 +20,13 @@
  *  Both ships run together. Enter (or 0 for t and d) skips that ship; m skips ships without steady values.
  *  After t, the ships that took part run continuously with DWELL_TIME until any key.
  *  No move timeout here (someone is watching): if a ship stalls, press any key.
- *  Kept from live: wrong-way check, both-limits check, watchdog.
+ *  Kept from live: both-limits check, watchdog.
  *  Values start from ship_config.h; each test keeps only its latest results.
  *****************************************************/
 
 /****** Types ******/
 enum Mode    { IDLE, WATCHING, JOGGING, TASK };
-enum Task    { T_STEADY, T_MIN, T_RUN, T_DUTY, T_PROF, T_CLEAR, T_MARCH };
+enum Task    { T_STEADY, T_MIN, T_RUN, T_DUTY, T_PROF, T_MARCH };
 enum Profile { P_CONST, P_TRIP };
 
 // One ship's progress through a task
@@ -47,8 +45,6 @@ struct Runner {
   unsigned long boostAfter; // 0 = never. Min test: past this, finish the return at steady duty.
   bool boosted;
   bool atLimit;             // Last move ended on the limit (not on stopAfter)
-  bool stopOnClear;         // Wrong-way calibration: end the move when the limit behind releases
-  bool clearSeen;           // March: release time already printed
   unsigned long lastMs;     // Last move time, ms
   // Pause before the next step
   bool waiting;
@@ -168,7 +164,6 @@ void printBlock() {
     printDefine(i, F("_TIME_AT_HYPER_SPEED_MS  "), tune[i].hyperHoldMs);
     printDefine(i, F("_DECEL_TO_CRUISE_MS      "), tune[i].cruiseRampMs);
     printDefine(i, F("_CRUISE_SPEED            "), tune[i].cruisePct);
-    printDefine(i, F("_LIMIT_CLEAR_MS          "), tune[i].limitClearMs);
   }
   Serial.print(F("// ---- END CALIBRATION ----\n"));
 }
@@ -184,7 +179,6 @@ void printMenu() {
   Serial.print(F("m  minimum speed calibration\n"));
   Serial.print(F("d  duty test: shuttle at a set duty %\n"));
   Serial.print(F("a  accel profile: set values, test\n"));
-  Serial.print(F("c  wrong-way time calibration\n"));
   Serial.print(F("g  go: run with current values\n"));
   Serial.print(F("p  print calibration block\n"));
   Serial.print(F("s  stop all\n"));
@@ -258,8 +252,6 @@ void startMove(uint8_t i, Dir d, Profile p, uint8_t duty) {
   r.stopAfter  = 0;
   r.boostAfter = 0;
   r.boosted    = false;
-  r.stopOnClear = false;
-  r.clearSeen   = false;
   r.moving     = true;
 }
 
@@ -538,14 +530,7 @@ void stepDuty(uint8_t i) {
   }
 }
 
-/****** Accel profile test (a) and wrong-way time (c) ******/
-// While values are being found, a generous limit; the measured one is used by g and live.
-unsigned long clearLimit(uint8_t i) {
-  if (task == T_PROF || task == T_CLEAR || task == T_MARCH) return CLEAR_CAL_MAX_MS;  // March: low PWM frequency changes speed
-  if (rn[i].profile == P_TRIP) return clearMs(tune[i]);
-  return LIMIT_CLEAR_TIME;
-}
-
+/****** Accel profile test (a) ******/
 // One round trip on the profile. Mid-track: home to POS1 first (untimed).
 void stepProf(uint8_t i) {
   Runner &r = rn[i];
@@ -578,76 +563,6 @@ void stepProf(uint8_t i) {
   }
 }
 
-void finishClear(uint8_t i) {
-  Runner &r = rn[i];
-  unsigned long avg = r.legSum / CLEAR_RUNS;
-  tune[i].limitClearMs = avg + CLEAR_MARGIN_MS;
-  printShip(i);
-  Serial.print(F("clear avg "));
-  Serial.print(avg);
-  Serial.print(F(" ms, LIMIT_CLEAR_MS = "));
-  Serial.print(tune[i].limitClearMs);
-  Serial.print(F(" ms\n"));
-  shipDone(i, true);
-}
-
-// Duty where the switch released, + CLEAR_RETRACT_ADD_PCT points, capped at full.
-uint8_t retractDuty(uint8_t i) {
-  unsigned int d = tripDuty(tune[i], rn[i].lastMs) + PCT_TO_DUTY(CLEAR_RETRACT_ADD_PCT);
-  return (d > 255) ? 255 : (uint8_t)d;
-}
-
-// From POS1: profile toward POS2 until POS1 releases, then back to POS1 at retractDuty().
-void stepClear(uint8_t i) {
-  Runner &r = rn[i];
-  switch (r.step) {
-    case 0:
-      r.legs = 0;
-      r.legSum = 0;
-      r.step = 1;
-      if (!shipIO[i].pos1.active) {
-        printShip(i);
-        Serial.print(F("homing to POS1 (untimed)\n"));
-        startMove(i, TO_POS1, P_TRIP, 0);
-        r.step = 4;
-        return;
-      }
-      [[fallthrough]];
-    case 1:
-      startMove(i, TO_POS2, P_TRIP, 0);
-      r.stopOnClear = true;
-      r.step = 2;
-      return;
-    case 2:
-      r.legSum += r.lastMs;
-      r.legs++;
-      printShip(i);
-      Serial.print(F("clear run "));
-      Serial.print(r.legs);
-      Serial.print(F(": "));
-      Serial.print(r.lastMs);
-      Serial.print(F(" ms, retracting at duty "));
-      Serial.print(retractDuty(i));
-      Serial.print(F("/255\n"));
-      r.step = 3;
-      waitThen(i, REVERSE_PAUSE);
-      return;
-    case 3:
-      if (r.dir == TO_POS2) {  // Pause done: retract
-        startMove(i, TO_POS1, P_CONST, retractDuty(i));
-        return;
-      }
-      if (r.legs >= CLEAR_RUNS) { finishClear(i); return; }  // Retracted to POS1
-      r.step = 1;
-      waitThen(i, REVERSE_PAUSE);
-      return;
-    case 4:  // Homing done
-      r.step = 1;
-      waitThen(i, REVERSE_PAUSE);
-      return;
-  }
-}
-
 void stepMarch(uint8_t i);  // Imperial March section, below
 
 void stepTask(uint8_t i) {
@@ -657,7 +572,6 @@ void stepTask(uint8_t i) {
     case T_RUN:    stepRun(i); break;
     case T_DUTY:   stepDuty(i); break;
     case T_PROF:   stepProf(i); break;
-    case T_CLEAR:  stepClear(i); break;
     case T_MARCH:  stepMarch(i); break;
   }
 }
@@ -687,23 +601,10 @@ void updateRunner(uint8_t i) {
   LimitSwitch &ahead = aheadOf(s, r.dir);
   unsigned long e = millis() - r.start;
 
-  LimitSwitch &behind = behindOf(s, r.dir);
-  if (task == T_MARCH && marchPlaying && !r.clearSeen && !behind.active) {  // For MARCH_LIMIT_CLEAR_MS
-    r.clearSeen = true;
-    printShip(i);
-    Serial.print(F("left the limit after "));
-    Serial.print(arrivalMs(behind, r.start));
-    Serial.print(F(" ms\n"));
-  }
-
   if (bothLimits(s)) {
     abortAll(i, F("both limits active — check wiring"));
-  } else if (r.stopOnClear && !behind.active) {
-    endMove(i, arrivalMs(behind, r.start), false);  // Raw release edge, same timing as arrivals
   } else if (ahead.active) {
     endMove(i, arrivalMs(ahead, r.start), true);
-  } else if (behind.active && e >= clearLimit(i)) {
-    abortAll(i, F("limit behind ship still active — motor reversed, jammed, or too slow to clear (LIMIT_CLEAR_TIME / LIMIT_CLEAR_MS, c)"));
   } else if (r.stopAfter && e >= r.stopAfter) {
     endMove(i, e, false);
   } else {
@@ -881,18 +782,12 @@ bool editProfile(uint8_t mask) {
   for (uint8_t i = 0; i < 2; i++) {
     if (!(mask & (1 << i))) continue;
     ShipTuning &u = tune[i];
-    bool startChanged = (u.startPct != s0 || u.takeOffRampMs != r1 || u.takeOffPct != s1);
     u.startPct      = (uint8_t)s0;
     u.takeOffRampMs = r1; u.takeOffPct = (uint8_t)s1;
     u.hyperRampMs   = r2; u.hyperPct   = (uint8_t)s2;
     u.hyperHoldMs   = h;
     u.cruiseRampMs  = r3; u.cruisePct  = (uint8_t)s3;
     u.mode = MODE_SURGE;
-    if (startChanged && u.limitClearMs > 0) {  // Measured time no longer matches the take-off ramp
-      u.limitClearMs = 0;
-      printShip(i);
-      Serial.print(F("start or take-off changed, LIMIT_CLEAR_MS reset to 0: run c before g or live\n"));
-    }
   }
   return true;
 }
@@ -907,18 +802,6 @@ void cmdProfile() {
   if (mode != TASK) return;
   for (uint8_t i = 0; i < 2; i++) if (test & (1 << i)) tune[i].mode = MODE_SURGE;
   Serial.print(F("Profile test, 1 round trip, DWELL_TIME between legs. Any key aborts.\n"));
-  kickTask();
-}
-
-void cmdClear() {
-  int8_t use = askShips(F("Wrong-way time calibration for:"));
-  if (use <= 0) { Serial.print(F("> ")); return; }
-  startTask(T_CLEAR, use & 1, use & 2);
-  if (mode != TASK) return;
-  for (uint8_t i = 0; i < 2; i++) if (use & (1 << i)) tune[i].mode = MODE_SURGE;
-  Serial.print(F("Wrong-way time: "));
-  Serial.print(CLEAR_RUNS);
-  Serial.print(F(" runs from POS1 on the profile. Any key aborts.\n"));
   kickTask();
 }
 
@@ -1119,9 +1002,6 @@ void updateJog() {
     latchKey(jogKey);
   } else if (aheadOf(s, jogDir).active) {
     endJog(F("Reached limit, stopped"));
-  } else if (behindOf(s, jogDir).active && millis() - rn[jogShip].start >= LIMIT_CLEAR_TIME) {
-    abortAll(jogShip, F("limit behind ship still active — motor reversed or ship jammed"));
-    latchKey(jogKey);
   } else if (millis() - jogLastKey >= (jogRepeating ? JOG_REPEAT_TIMEOUT : JOG_FIRST_TIMEOUT)) {
     endJog(F("Key released, stopped"));
   }
@@ -1141,7 +1021,6 @@ void handleIdleKey(char c) {
     case 'j': cmdJogDuty(); break;
     case 'g': cmdGo(); break;
     case 'a': cmdProfile(); break;
-    case 'c': cmdClear(); break;
     case 'i': cmdMarch(); break;  // Secret: not in the menu
     case 'p': printBlock(); Serial.print(F("> ")); break;
     case 's': stopAll(); Serial.print(F("All stopped\n> ")); break;

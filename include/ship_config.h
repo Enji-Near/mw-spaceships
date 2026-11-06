@@ -47,7 +47,6 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 /****** Live timing (ms) ******/
 #define DWELL_TIME        5000UL   // Pause at each end (also used by bench continuous runs)
 #define MOVE_TIMEOUT      93000UL  // Live only. 1.5x slowest bench trip (Ship 2, 62007 ms, 2026-11-05)
-#define LIMIT_CLEAR_TIME  1500UL   // Ship must leave the limit behind it within this time (wrong-way check). MODE_SURGE: SHIPx_LIMIT_CLEAR_MS.
 #define FAULT_RETRY_TIME  10000UL  // Cool-down before retry after a fault
 #define MAX_FAULTS        3        // Consecutive faults before lockout
 #define LIMIT_DEBOUNCE    20UL     // Limit must read steady this long
@@ -74,9 +73,6 @@ const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same 
 #define MARCH_DUTY_PCT     50     // Fixed duty while singing: 50% PWM is the loudest note, half of hyper speed
 #define MARCH_OCTAVE_DOWN  1      // 0 = as written, 1 = one octave lower. Lower = more current ripple = louder
                                   // (ripple ~ 1/f, unverified on these motors). Check motor temperature after.
-#define MARCH_LIMIT_CLEAR_MS 1110UL  // Live wrong-way time while singing (tone PWM is slower). Measured with
-                                     // bench_test i ("left the limit after"), max + 500. 0 = not measured: live won't build.
-                                     // 2026-11-06, 4 runs: Ship 1 156-198 ms (both ways), Ship 2 604-610 ms.
 #define MARCH_START_DELAY_MS 0UL     // After homing, before the first note. 0: homing time is the lead-in
 #define MARCH_TEMPO_PCT    100    // Note lengths in %, 100 = as written (~26 s)
 #define MARCH_NOTE_GAP_MS  40UL   // Silence at the end of each note, so repeated notes are heard
@@ -88,18 +84,10 @@ const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same 
 // % 0-100 to PWM duty 0-255, rounded
 #define PCT_TO_DUTY(p)  (((p) * 255 + 50) / 100)
 
-/****** Wrong-way time calibration (bench_test c) ******/
-// Measures motor-on to start-switch release on the MODE_SURGE profile, from POS1.
-#define CLEAR_RUNS         3        // Runs averaged
-#define CLEAR_MARGIN_MS    500UL    // Added to the average to get SHIPx_LIMIT_CLEAR_MS
-#define CLEAR_RETRACT_ADD_PCT  10   // Back to POS1 at the duty where the switch released + this (% points)
-#define CLEAR_CAL_MAX_MS   15000UL  // Bench a/c tests only: wrong-way limit while values are being found
-
 /****** Calibration results — replace this block with bench_test 'p' output ******/
 // STEADY_DUTY: PWM 0-255 (115 = 45%, 140 = 55%). STEADY_TRIP_MS: measured one-way time at that duty.
 // MIN_DUTY: creep duty. MIN_TRIP_MS: estimated one-way time at MIN_DUTY.
 // MODE_SURGE: *_SPEED in % 0-100, times in ms. Set with bench_test a. START_SPEED: above MIN_DUTY, so it moves at once.
-// LIMIT_CLEAR_MS: wrong-way time for MODE_SURGE (bench_test c). 0 = not measured: LIMIT_CLEAR_TIME is used.
 // ---- BEGIN CALIBRATION ----
 #define SHIP1_MODE                    MODE_SURGE
 #define SHIP1_STEADY_DUTY             115
@@ -114,7 +102,6 @@ const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same 
 #define SHIP1_TIME_AT_HYPER_SPEED_MS  10000
 #define SHIP1_DECEL_TO_CRUISE_MS      4000
 #define SHIP1_CRUISE_SPEED            50
-#define SHIP1_LIMIT_CLEAR_MS          757
 #define SHIP2_MODE                    MODE_SURGE
 #define SHIP2_STEADY_DUTY             150
 #define SHIP2_STEADY_TRIP_MS          67365
@@ -128,5 +115,4 @@ const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same 
 #define SHIP2_TIME_AT_HYPER_SPEED_MS  55000
 #define SHIP2_DECEL_TO_CRUISE_MS      2000
 #define SHIP2_CRUISE_SPEED            65
-#define SHIP2_LIMIT_CLEAR_MS          950
 // ---- END CALIBRATION ----

@@ -10,27 +10,14 @@
  *
  *  Safety layers:
  *    1. Move timeout — target limit never reached (slipped rope, jam, dead switch)
- *    2. Wrong-way check — limit behind the ship still active after clearMs() (LIMIT_CLEAR_TIME or SHIPx_LIMIT_CLEAR_MS)
- *    3. Both-limits check — mechanically impossible → wiring fault
- *    4. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
- *    5. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
+ *    2. Both-limits check — mechanically impossible → wiring fault
+ *    3. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
+ *    4. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
  *
  *  Imperial March (MARCH_ON_POWER_UP, MARCH_ON_RESET, MARCH_ON_BUTTON on A4): Ship 1 homes the way it was going,
  *  Ship 2 homes to POS2, both sing away from their limit, then the normal cycle carries on.
  *  Same safety checks; fault retries wait for the song; faulted ships sit it out.
  *********************************************/
-
-#if (MARCH_ON_POWER_UP || MARCH_ON_RESET || MARCH_ON_BUTTON) && (MARCH_LIMIT_CLEAR_MS == 0)
-  #error "MARCH_LIMIT_CLEAR_MS is 0. Measure with bench_test i, or turn the march off."
-#endif
-
-// Surge needs a measured wrong-way time, or every trip faults: fail the build, not the display.
-#if (SHIP1_MODE == MODE_SURGE) && (SHIP1_LIMIT_CLEAR_MS == 0)
-  #error "Ship 1 SURGE: SHIP1_LIMIT_CLEAR_MS is 0. Run bench_test c, then paste 'p' output."
-#endif
-#if (SHIP2_MODE == MODE_SURGE) && (SHIP2_LIMIT_CLEAR_MS == 0)
-  #error "Ship 2 SURGE: SHIP2_LIMIT_CLEAR_MS is 0. Run bench_test c, then paste 'p' output."
-#endif
 
 /****** Types ******/
 enum ShipState {
@@ -161,8 +148,6 @@ void updateMove(Ship &s, ShipState arrivedState) {
   if (aheadOf(s.io, d).active) {
     s.faultCount = 0;
     enterState(s, arrivedState);
-  } else if (behindOf(s.io, d).active && elapsed >= clearMs(s.tune)) {
-    shipFault(s, F("limit behind ship still active — motor reversed or ship jammed"));
   } else if (elapsed >= MOVE_TIMEOUT) {
     shipFault(s, F("move timeout — limit never reached"));
   } else {
@@ -170,15 +155,12 @@ void updateMove(Ship &s, ShipState arrivedState) {
   }
 }
 
-// Song move: fixed duty with tone. Own wrong-way time: tone PWM brakes longer each cycle, so it is slower.
+// Song move: fixed duty with tone, until the limit or the end of the song.
 void updateSing(Ship &s) {
   Dir d = moveDir(s.state);
-  unsigned long elapsed = millis() - s.stateStart;
   if (aheadOf(s.io, d).active) {
     s.faultCount = 0;
     enterState(s, MARCH_DONE);
-  } else if (behindOf(s.io, d).active && elapsed >= MARCH_LIMIT_CLEAR_MS) {
-    shipFault(s, F("limit behind ship still active during the march"));
   } else {
     motorDriveTone(s.io, d, PCT_TO_DUTY(MARCH_DUTY_PCT));
   }

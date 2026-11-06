@@ -37,7 +37,6 @@ struct ShipTuning {
   unsigned long hyperHoldMs;    // Time at hyper
   unsigned long cruiseRampMs;   // Hyper -> cruise
   uint8_t cruisePct;
-  unsigned long limitClearMs;  // 0 = not measured
 };
 
 struct ShipIO {
@@ -57,7 +56,6 @@ void limitUpdate(LimitSwitch &sw);
 void shipUpdateLimits(ShipIO &s);
 bool bothLimits(const ShipIO &s);
 LimitSwitch &aheadOf(ShipIO &s, Dir d);
-LimitSwitch &behindOf(ShipIO &s, Dir d);
 
 // Motor
 void shipBegin(ShipIO &s);                        // Outputs to brake, limits read
@@ -66,7 +64,6 @@ void motorDrive(ShipIO &s, Dir d, uint8_t duty);  // duty 0 = brake, 255 = full
 
 // Speed profile, elapsed = ms since the trip started
 uint8_t tripDuty(const ShipTuning &t, unsigned long elapsed);   // Per t.mode
-unsigned long clearMs(const ShipTuning &t);  // Wrong-way check time for this ship's mode
 
 // Tone mode (bench Imperial March): the TCA0 PWM frequency is the note. D5, D9, D10 share it.
 void toneSetHz(uint16_t hz);                          // 0 = silent (normal PWM frequency)

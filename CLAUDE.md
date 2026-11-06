@@ -4,7 +4,7 @@
 - Two model spaceships shuttle on rope-and-pulley lines. Each ship has one 12V DC motor, driven by its own DRV8871 H-bridge (direction + PWM speed) and stopped by a limit switch at each end.
 - Each ship's cycle: move → hit limit → stop → 5 s dwell → reverse, repeating while powered. The two ships run independently.
 - Deployment: unattended public display, runs continuously while powered.
-- Firmware safety layers: move timeout, wrong-way check, both-limits check, 3-fault lockout, ~2 s watchdog.
+- Firmware safety layers: move timeout, both-limits check, 3-fault lockout, ~2 s watchdog.
 
 ## Hardware
 - Board: Arduino Nano Every (ATmega4809), 5V logic, powered from 12V on VIN. The VIN regulator accepts up to 21V (ABX00028 datasheet, p.2). A0–A7 work as digital GPIO (ABX00028, §6.2) and map to D14–D21 (core `pins_arduino.h`, nona4809).
@@ -36,7 +36,7 @@
 
 ## Toolchain and commands
 - VS Code + PlatformIO on Ubuntu Linux; repo on GitHub.
-- Envs: `mw_space_two_simple_ships` is the live display firmware (Imperial March at power-up, on the reset button, and on the A4 button); `bench_test` is a serial menu to jog ships (hold 5–8, speed set with j, default `JOG_PCT` 40%), watch the limit switches (w), calibrate steady speed (t) and minimum speed (m), shuttle at a typed duty % until stopped (d), set and test the take-off / hyper / cruise profile (a), measure the wrong-way time (c), run continuously with the current values (g), and print the calibration block for `include/ship_config.h` (p).
+- Envs: `mw_space_two_simple_ships` is the live display firmware (Imperial March at power-up, on the reset button, and on the A4 button); `bench_test` is a serial menu to jog ships (hold 5–8, speed set with j, default `JOG_PCT` 40%), watch the limit switches (w), calibrate steady speed (t) and minimum speed (m), shuttle at a typed duty % until stopped (d), set and test the take-off / hyper / cruise profile (a), run continuously with the current values (g), and print the calibration block for `include/ship_config.h` (p).
 - Shared code: `include/ship_motion.h` + `src/ship_motion.cpp`, built into both envs.
 
 ## Code standards
