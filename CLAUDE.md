@@ -14,10 +14,11 @@
 - D3 → Ship 2 driver IN1 (PWM)
 - D5 → Ship 2 driver IN2 (PWM)
 - Which input drives toward POS1 is set on the bench; if a ship runs the wrong way, swap that ship's IN1/IN2 assignment.
-- D7 ← Ship 1 limit, POS1
-- D6 ← Ship 1 limit, POS2
-- D4 ← Ship 2 limit, POS1 (moved from D9 in v0.4)
-- D8 ← Ship 2 limit, POS2
+- D6 ← Ship 1 limit, POS1 (motor end)
+- D7 ← Ship 1 limit, POS2 (away from motor)
+- D8 ← Ship 2 limit, POS1 (motor end)
+- D4 ← Ship 2 limit, POS2 (away from motor)
+- Limit pins remapped 2026-11-05 so each POS1 terminal sits next to the Nano.
 - D13 → onboard status LED: slow blink = OK, fast blink = fault
 - D0/D1 reserved (hardware USART). Spare: D2, D11, D12, A0–A7 (D14–D21).
 - PWM pins on the Nano Every: D3, D5, D6, D9, D10 (core variant timer map). They share a clock with millis() (core `variant.c`, `wiring.c`), so changing PWM frequency needs care. Unverified until tested.

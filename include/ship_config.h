@@ -17,10 +17,11 @@ const uint8_t SHIP2_IN_TO_POS1 = 3;   // Ship 2 IN1
 const uint8_t SHIP2_IN_TO_POS2 = 5;   // Ship 2 IN2
 
 /****** Limit switches (INPUT_PULLUP) ******/
-const uint8_t SHIP1_LIMIT_POS1 = 7;
-const uint8_t SHIP1_LIMIT_POS2 = 6;
-const uint8_t SHIP2_LIMIT_POS1 = 4;   // Moved from D9 in v0.4
-const uint8_t SHIP2_LIMIT_POS2 = 8;
+// POS1 = motor end. Remapped 2026-11-05 so each ship's POS1 terminal sits nearest the Nano.
+const uint8_t SHIP1_LIMIT_POS1 = 6;
+const uint8_t SHIP1_LIMIT_POS2 = 7;
+const uint8_t SHIP2_LIMIT_POS1 = 8;
+const uint8_t SHIP2_LIMIT_POS2 = 4;
 
 // Pin level when a ship IS at a limit. NO to GND: LOW. NC to GND: HIGH. Bench-verified 2026-10-19: all NC.
 #define SHIP1_POS1_ACTIVE  HIGH
