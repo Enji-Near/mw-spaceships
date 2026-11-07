@@ -116,5 +116,5 @@ const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same 
 #define SHIP2_HYPER_SPEED             60
 #define SHIP2_TIME_AT_HYPER_SPEED_MS  55000
 #define SHIP2_DECEL_TO_CRUISE_MS      2000
-#define SHIP2_CRUISE_SPEED            65
+#define SHIP2_CRUISE_SPEED            60
 // ---- END CALIBRATION ----
