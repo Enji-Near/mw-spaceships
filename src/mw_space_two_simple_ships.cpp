@@ -14,7 +14,7 @@
  *    3. Fault → brake, cool-down, retry; lockout after MAX_FAULTS in a row (power cycle clears)
  *    4. Hardware watchdog (~2 s). Reset = driver inputs low = coast.
  *
- *  Imperial March (MARCH_ON_POWER_UP, MARCH_ON_RESET, MARCH_ON_BUTTON on A4): Ship 1 homes the way it was going,
+ *  Imperial March (MARCH_ON_POWER_UP, MARCH_ON_RESET, MARCH_ON_BUTTON on A4, MARCH_ON_SERIAL): Ship 1 homes the way it was going,
  *  Ship 2 homes to POS2, both sing away from their limit, then the normal cycle carries on.
  *  Same safety checks; fault retries wait for the song; faulted ships sit it out.
  *********************************************/
@@ -274,11 +274,19 @@ void marchEnd() {
   #endif
 }
 
+// True if the command byte arrived. Reads every byte, so input during the song is dropped.
+bool serialMarchCmd() {
+  bool cmd = false;
+  while (Serial.available() > 0) if (Serial.read() == MARCH_SERIAL_CMD) cmd = true;
+  return cmd;
+}
+
 void updateMarch() {
   bool pressed = buttonPressed();  // Every loop, so presses during the song are seen and dropped
+  bool serialCmd = serialMarchCmd();
   switch (marchPhase) {
     case M_OFF:
-      if (MARCH_ON_BUTTON && pressed) marchButtonStart();
+      if ((MARCH_ON_BUTTON && pressed) || (MARCH_ON_SERIAL && serialCmd)) marchButtonStart();
       return;
     case M_BRAKE:
       if (millis() - marchPhaseStart < MARCH_BRAKE_MS) return;
@@ -330,8 +338,8 @@ void setup() {
   bool march    = (MARCH_ON_POWER_UP && powerUp) || (MARCH_ON_RESET && resetPin);  // Never after watchdog or upload
   if (powerUp) dirMem.magic = 0;  // .noinit is random after power-up
 
+  Serial.begin(115200);  // Always on: the serial march command needs RX
   #if DEBUG
-  Serial.begin(115200);
   Serial.print(F("Space Ships v0.4: Online. Reset flags 0x"));
   Serial.print(rf, HEX);
   Serial.print(powerUp ? F(" (power-up)\n") : resetPin ? F(" (reset pin)\n") : F("\n"));

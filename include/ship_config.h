@@ -65,8 +65,10 @@ const uint8_t STATUS_LED = LED_BUILTIN;  // D13: slow blink = OK, fast blink = f
 #define MIN_STEP_PCT        10      // Min speed: step down by this % of steady each try
 
 /****** Imperial March (bench_test secret key i; live: power-up, reset button, A4 button) ******/
-#define MARCH_ON_POWER_UP  1      // Live: play at power-up (not after a watchdog reset or upload)
-#define MARCH_ON_RESET     1      // Live: play after the reset button. USB connect also resets this way: it plays then too.
+#define MARCH_ON_POWER_UP  0      // Live: play at power-up (not after a watchdog reset or upload)
+#define MARCH_ON_RESET     0      // Live: play after the reset button. USB connect also resets this way: it plays then too.
+#define MARCH_ON_SERIAL    1      // Live: serial command (USB, 115200) plays it whenever the cycle is running
+#define MARCH_SERIAL_CMD   'i'    // The command byte; any other byte is ignored
 #define MARCH_ON_BUTTON    1      // Live: button press plays it whenever the cycle is running (ignored during the song)
 const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same debounce as the limits. Also I2C SDA: no Wire.
 #define MARCH_BRAKE_MS     500UL  // Button: brake this long before homing, so a ship never reverses at speed
@@ -98,7 +100,7 @@ const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same 
 #define SHIP1_RAMP_TO_TAKE_OFF_MS     10000
 #define SHIP1_TAKE_OFF_SPEED          45
 #define SHIP1_ACCEL_TO_HYPER_SPEED_MS 2000
-#define SHIP1_HYPER_SPEED             90
+#define SHIP1_HYPER_SPEED             75
 #define SHIP1_TIME_AT_HYPER_SPEED_MS  10000
 #define SHIP1_DECEL_TO_CRUISE_MS      4000
 #define SHIP1_CRUISE_SPEED            50
@@ -111,7 +113,7 @@ const uint8_t MARCH_BUTTON_PIN = A4;  // D18, button to GND, INPUT_PULLUP, same 
 #define SHIP2_RAMP_TO_TAKE_OFF_MS     15000
 #define SHIP2_TAKE_OFF_SPEED          50
 #define SHIP2_ACCEL_TO_HYPER_SPEED_MS 2000
-#define SHIP2_HYPER_SPEED             75
+#define SHIP2_HYPER_SPEED             60
 #define SHIP2_TIME_AT_HYPER_SPEED_MS  55000
 #define SHIP2_DECEL_TO_CRUISE_MS      2000
 #define SHIP2_CRUISE_SPEED            65
